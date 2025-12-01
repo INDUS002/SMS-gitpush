@@ -1,0 +1,157 @@
+"""
+Views for teacher app - API layer for App 3
+"""
+from rest_framework import viewsets, status, filters
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
+from .models import (
+    Class, ClassStudent, Attendance, Assignment,
+    Exam, Grade, Timetable, StudyMaterial
+)
+from .serializers import (
+    ClassSerializer, ClassStudentSerializer, AttendanceSerializer,
+    AssignmentSerializer, ExamSerializer, GradeSerializer,
+    TimetableSerializer, StudyMaterialSerializer
+)
+from main_login.permissions import IsTeacher
+from management_admin.models import Teacher
+
+
+class ClassViewSet(viewsets.ModelViewSet):
+    """ViewSet for Class management"""
+    queryset = Class.objects.all()
+    serializer_class = ClassSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['teacher', 'department', 'academic_year']
+    search_fields = ['name', 'section']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter classes by current teacher"""
+        user = self.request.user
+        try:
+            teacher = Teacher.objects.get(user=user)
+            return Class.objects.filter(teacher=teacher)
+        except Teacher.DoesNotExist:
+            return Class.objects.none()
+
+
+class ClassStudentViewSet(viewsets.ModelViewSet):
+    """ViewSet for ClassStudent management"""
+    queryset = ClassStudent.objects.all()
+    serializer_class = ClassStudentSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filterset_fields = ['class_obj', 'student']
+
+
+class AttendanceViewSet(viewsets.ModelViewSet):
+    """ViewSet for Attendance management"""
+    queryset = Attendance.objects.all()
+    serializer_class = AttendanceSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['class_obj', 'student', 'date', 'status']
+    ordering_fields = ['date', 'created_at']
+    ordering = ['-date']
+
+
+class AssignmentViewSet(viewsets.ModelViewSet):
+    """ViewSet for Assignment management"""
+    queryset = Assignment.objects.all()
+    serializer_class = AssignmentSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['class_obj', 'teacher']
+    search_fields = ['title', 'description']
+    ordering_fields = ['due_date', 'created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter assignments by current teacher"""
+        user = self.request.user
+        try:
+            teacher = Teacher.objects.get(user=user)
+            return Assignment.objects.filter(teacher=teacher)
+        except Teacher.DoesNotExist:
+            return Assignment.objects.none()
+
+
+class ExamViewSet(viewsets.ModelViewSet):
+    """ViewSet for Exam management"""
+    queryset = Exam.objects.all()
+    serializer_class = ExamSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['class_obj', 'teacher']
+    search_fields = ['title', 'description']
+    ordering_fields = ['exam_date', 'created_at']
+    ordering = ['-exam_date']
+    
+    def get_queryset(self):
+        """Filter exams by current teacher"""
+        user = self.request.user
+        try:
+            teacher = Teacher.objects.get(user=user)
+            return Exam.objects.filter(teacher=teacher)
+        except Teacher.DoesNotExist:
+            return Exam.objects.none()
+
+
+class GradeViewSet(viewsets.ModelViewSet):
+    """ViewSet for Grade management"""
+    queryset = Grade.objects.all()
+    serializer_class = GradeSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['exam', 'student']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+
+
+class TimetableViewSet(viewsets.ModelViewSet):
+    """ViewSet for Timetable management"""
+    queryset = Timetable.objects.all()
+    serializer_class = TimetableSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['class_obj', 'teacher', 'day_of_week']
+    search_fields = ['subject']
+    ordering_fields = ['day_of_week', 'start_time']
+    ordering = ['day_of_week', 'start_time']
+    
+    def get_queryset(self):
+        """Filter timetables by current teacher"""
+        user = self.request.user
+        try:
+            teacher = Teacher.objects.get(user=user)
+            return Timetable.objects.filter(teacher=teacher)
+        except Teacher.DoesNotExist:
+            return Timetable.objects.none()
+
+
+class StudyMaterialViewSet(viewsets.ModelViewSet):
+    """ViewSet for StudyMaterial management"""
+    queryset = StudyMaterial.objects.all()
+    serializer_class = StudyMaterialSerializer
+    permission_classes = [IsAuthenticated, IsTeacher]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['class_obj', 'teacher']
+    search_fields = ['title', 'description']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter study materials by current teacher"""
+        user = self.request.user
+        try:
+            teacher = Teacher.objects.get(user=user)
+            return StudyMaterial.objects.filter(teacher=teacher)
+        except Teacher.DoesNotExist:
+            return StudyMaterial.objects.none()
+

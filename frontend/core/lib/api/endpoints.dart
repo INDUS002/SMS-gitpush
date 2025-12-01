@@ -1,0 +1,75 @@
+/// All backend endpoints centralized
+class Endpoints {
+  // Base URL - Update this to match your Django backend
+  static const String baseUrl = 'http://localhost:8000/api';
+
+  // Authentication endpoints
+  static const String login = '/auth/login/';
+  static const String roleLogin = '/auth/role-login/';
+  static const String logout = '/auth/logout/';
+  static const String refreshToken = '/auth/refresh/';
+  static const String register = '/auth/register/';
+  static const String routes = '/auth/routes/';
+
+  // Admin endpoints
+  static const String adminSchools = '/admin/schools';
+  static const String adminSchoolDetails = '/admin/schools/{id}';
+  static const String adminRevenue = '/admin/revenue';
+  static const String adminBilling = '/admin/billing';
+
+  // Management endpoints
+  static const String students = '/management/students';
+  static const String teachers = '/management/teachers';
+  static const String departments = '/management/departments';
+  static const String buses = '/management/buses';
+  static const String busRoutes = '/management/bus-routes';
+  static const String fees = '/management/fees';
+  static const String admissions = '/management/admissions';
+  static const String examinations = '/management/examinations';
+  static const String events = '/management/events';
+  static const String activities = '/management/activities';
+  static const String awards = '/management/awards';
+  static const String gallery = '/management/gallery';
+  static const String notifications = '/management/notifications';
+  static const String calendar = '/management/calendar';
+  static const String campusLife = '/management/campus-life';
+
+  // Teacher endpoints
+  static const String teacherClasses = '/teacher/classes';
+  static const String teacherStudents = '/teacher/students';
+  static const String teacherTimetable = '/teacher/timetable';
+  static const String teacherExams = '/teacher/exams';
+  static const String teacherGrades = '/teacher/grades';
+  static const String teacherAttendance = '/teacher/attendance';
+  static const String teacherAssignment = '/teacher/assignments';
+  static const String teacherStudyMaterial = '/teacher/study-material';
+  static const String teacherCommunication = '/teacher/communication';
+  static const String teacherResults = '/teacher/results';
+  static const String teacherProfile = '/teacher/profile';
+
+  // Parent endpoints
+  static const String parentDashboard = '/parent/dashboard';
+  static const String parentProfile = '/parent/profile';
+  static const String parentAcademics = '/parent/academics';
+  static const String parentResults = '/parent/results';
+  static const String parentTests = '/parent/tests';
+  static const String parentProjects = '/parent/projects';
+  static const String parentHomework = '/parent/homework';
+  static const String parentDailyTask = '/parent/daily-tasks';
+  static const String parentCalendar = '/parent/calendar';
+  static const String parentGallery = '/parent/gallery';
+  static const String parentBus = '/parent/bus';
+  static const String parentFees = '/parent/fees';
+  static const String parentExtracurricular = '/parent/extracurricular';
+
+  // Helper method to build full URL
+  static String buildUrl(String endpoint) {
+    return '$baseUrl$endpoint';
+  }
+
+  // Helper method to replace path parameters
+  static String replacePathParam(String endpoint, String param, String value) {
+    return endpoint.replaceAll('{$param}', value);
+  }
+}
+

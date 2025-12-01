@@ -1,0 +1,187 @@
+"""
+Views for student_parent app - API layer for App 4
+"""
+from rest_framework import viewsets, status, filters
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django_filters.rest_framework import DjangoFilterBackend
+from django.utils import timezone
+from .models import Parent, Notification, Fee, Communication
+from .serializers import (
+    ParentSerializer, NotificationSerializer,
+    FeeSerializer, CommunicationSerializer
+)
+from main_login.permissions import IsStudentParent
+from management_admin.models import Student
+
+
+class ParentViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for Parent profile"""
+    queryset = Parent.objects.all()
+    serializer_class = ParentSerializer
+    permission_classes = [IsAuthenticated, IsStudentParent]
+    
+    def get_queryset(self):
+        """Filter by current user"""
+        return Parent.objects.filter(user=self.request.user)
+
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    """ViewSet for Notification management"""
+    queryset = Notification.objects.all()
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated, IsStudentParent]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['notification_type', 'is_read']
+    search_fields = ['title', 'message']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter notifications by current user"""
+        return Notification.objects.filter(recipient=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Mark notification as read"""
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save()
+        return Response({'message': 'Notification marked as read'})
+    
+    @action(detail=False, methods=['get'])
+    def unread_count(self, request):
+        """Get count of unread notifications"""
+        count = Notification.objects.filter(
+            recipient=request.user,
+            is_read=False
+        ).count()
+        return Response({'unread_count': count})
+
+
+class FeeViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for Fee viewing"""
+    queryset = Fee.objects.all()
+    serializer_class = FeeSerializer
+    permission_classes = [IsAuthenticated, IsStudentParent]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['status', 'student']
+    ordering_fields = ['due_date', 'created_at']
+    ordering = ['-due_date']
+    
+    def get_queryset(self):
+        """Filter fees by student's parent or student themselves"""
+        user = self.request.user
+        try:
+            # Check if user is a parent
+            parent = Parent.objects.get(user=user)
+            student_ids = parent.students.values_list('id', flat=True)
+            return Fee.objects.filter(student_id__in=student_ids)
+        except Parent.DoesNotExist:
+            try:
+                # Check if user is a student
+                student = Student.objects.get(user=user)
+                return Fee.objects.filter(student=student)
+            except Student.DoesNotExist:
+                return Fee.objects.none()
+    
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Get fee summary"""
+        fees = self.get_queryset()
+        total_pending = sum(
+            float(fee.amount) for fee in fees.filter(status='pending')
+        )
+        total_paid = sum(
+            float(fee.amount) for fee in fees.filter(status='paid')
+        )
+        total_overdue = sum(
+            float(fee.amount) for fee in fees.filter(status='overdue')
+        )
+        
+        return Response({
+            'total_pending': total_pending,
+            'total_paid': total_paid,
+            'total_overdue': total_overdue,
+            'total_fees': fees.count(),
+        })
+
+
+class CommunicationViewSet(viewsets.ModelViewSet):
+    """ViewSet for Communication management"""
+    queryset = Communication.objects.all()
+    serializer_class = CommunicationSerializer
+    permission_classes = [IsAuthenticated, IsStudentParent]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['sender', 'recipient', 'is_read']
+    search_fields = ['subject', 'message']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+    
+    def get_queryset(self):
+        """Filter communications by current user"""
+        return Communication.objects.filter(
+            recipient=self.request.user
+        ) | Communication.objects.filter(
+            sender=self.request.user
+        )
+    
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        """Mark communication as read"""
+        communication = self.get_object()
+        if communication.recipient == request.user:
+            communication.is_read = True
+            communication.save()
+            return Response({'message': 'Communication marked as read'})
+        return Response(
+            {'error': 'You can only mark your received messages as read'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+
+class StudentDashboardViewSet(viewsets.ViewSet):
+    """ViewSet for Student Dashboard"""
+    permission_classes = [IsAuthenticated, IsStudentParent]
+    
+    @action(detail=False, methods=['get'])
+    def overview(self, request):
+        """Get student dashboard overview"""
+        user = request.user
+        try:
+            student = Student.objects.get(user=user)
+            
+            # Get recent data
+            recent_attendances = Attendance.objects.filter(
+                student=student
+            ).order_by('-date')[:5]
+            
+            recent_assignments = Assignment.objects.filter(
+                class_obj__class_students__student=student
+            ).order_by('-created_at')[:5]
+            
+            recent_grades = Grade.objects.filter(
+                student=student
+            ).order_by('-created_at')[:5]
+            
+            unread_notifications = Notification.objects.filter(
+                recipient=user,
+                is_read=False
+            ).count()
+            
+            return Response({
+                'student_id': student.student_id,
+                'class_name': student.class_name,
+                'section': student.section,
+                'recent_attendances_count': recent_attendances.count(),
+                'recent_assignments_count': recent_assignments.count(),
+                'recent_grades_count': recent_grades.count(),
+                'unread_notifications': unread_notifications,
+            })
+        except Student.DoesNotExist:
+            return Response(
+                {'error': 'Student profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+

@@ -1,0 +1,23 @@
+"""
+URLs for teacher app
+"""
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from . import views
+
+app_name = 'teacher'
+
+router = DefaultRouter()
+router.register(r'classes', views.ClassViewSet, basename='class')
+router.register(r'class-students', views.ClassStudentViewSet, basename='classstudent')
+router.register(r'attendance', views.AttendanceViewSet, basename='attendance')
+router.register(r'assignments', views.AssignmentViewSet, basename='assignment')
+router.register(r'exams', views.ExamViewSet, basename='exam')
+router.register(r'grades', views.GradeViewSet, basename='grade')
+router.register(r'timetable', views.TimetableViewSet, basename='timetable')
+router.register(r'study-materials', views.StudyMaterialViewSet, basename='studymaterial')
+
+urlpatterns = [
+    path('', include(router.urls)),
+]
+
