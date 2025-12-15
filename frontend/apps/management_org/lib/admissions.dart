@@ -148,8 +148,6 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
   final TextEditingController _emergencyContactController = TextEditingController();
   final TextEditingController _medicalInfoController = TextEditingController();
   final TextEditingController _remarksController = TextEditingController();
-  final TextEditingController _gradeController = TextEditingController();
-  final TextEditingController _feesController = TextEditingController();
   
   // Search/Filter Controllers
   final TextEditingController _searchController = TextEditingController();
@@ -158,6 +156,7 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
   String? _selectedClass;
   String? _selectedCategory;
   String? _selectedBloodGroup;
+  String? _selectedGrade;
   DateTime? _selectedDob;
 
   String _filterStatus = "";
@@ -190,8 +189,6 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
     _emergencyContactController.dispose();
     _medicalInfoController.dispose();
     _remarksController.dispose();
-    _gradeController.dispose();
-    _feesController.dispose();
     super.dispose();
   }
 
@@ -297,8 +294,17 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
         return null;
       }
 
+      // Use student_id as the primary identifier (it's the PK in backend)
+      // student_id is required and should always be present
+      final studentIdValue = json['student_id']?.toString() ?? json['id']?.toString() ?? '';
+      
+      if (studentIdValue.isEmpty) {
+        print('Warning: Admission missing student_id: ${json['student_name']}');
+        return null; // Skip admissions without student_id
+      }
+      
       return Admission(
-        id: json['id'] ?? 0,
+        id: studentIdValue.hashCode, // Use hash code for internal ID comparison
         studentName: json['student_name'] ?? '',
         parentName: json['parent_name'] ?? '',
         dateOfBirth: dateOfBirth,
@@ -308,7 +314,7 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
         category: json['category'] ?? '',
         status: json['status'] ?? 'Pending',
         admissionNumber: json['admission_number'],
-        studentId: json['student_id'],
+        studentId: studentIdValue, // Always set studentId since it's required
         email: json['email'],
         parentPhone: json['parent_phone'],
         emergencyContact: json['emergency_contact'],
@@ -342,7 +348,6 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
 
   Future<void> _addNewAdmissionFromPage() async {
     if (_formKey.currentState!.validate() &&
-        _admissionNoController.text.trim().isNotEmpty &&
         _firstNameController.text.trim().isNotEmpty &&
         _selectedDob != null &&
         _selectedGender != null &&
@@ -364,13 +369,14 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
           'address': _addressController.text.trim(),
           'category': _selectedCategory!,
           'status': 'Pending',
-          'admission_number': _admissionNoController.text.trim(),
+          // Only include admission_number if it's not empty
+          if (_admissionNoController.text.trim().isNotEmpty)
+            'admission_number': _admissionNoController.text.trim(),
+          // student_id is optional - backend will auto-generate if not provided
           if (_studentIdController.text.trim().isNotEmpty)
             'student_id': _studentIdController.text.trim(),
-          if (_gradeController.text.trim().isNotEmpty)
-            'grade': _gradeController.text.trim(),
-          if (_feesController.text.trim().isNotEmpty)
-            'fees': double.tryParse(_feesController.text.trim()),
+          if (_selectedGrade != null && _selectedGrade!.isNotEmpty)
+            'grade': _selectedGrade!,
           if (_emailController.text.trim().isNotEmpty)
             'email': _emailController.text.trim(),
           if (_parentPhoneController.text.trim().isNotEmpty)
@@ -428,12 +434,11 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
           _emergencyContactController.clear();
           _medicalInfoController.clear();
           _remarksController.clear();
-          _gradeController.clear();
-          _feesController.clear();
           _selectedGender = null;
           _selectedClass = null;
           _selectedCategory = null;
           _selectedBloodGroup = null;
+          _selectedGrade = null;
           _selectedDob = null;
 
           // Reload admissions from server
@@ -516,20 +521,95 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
     }
   }
 
-  void _updateAdmission(Admission updatedAdmission) {
-    setState(() {
-      final index = _allAdmissions.indexWhere((a) => a.id == updatedAdmission.id);
-      if (index != -1) {
-        _allAdmissions[index] = updatedAdmission;
-        _filterAdmissions();
+  Future<void> _updateAdmission(Admission updatedAdmission) async {
+    // student_id is required for API calls
+    if (updatedAdmission.studentId == null || updatedAdmission.studentId!.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Error: Admission missing student ID'),
+            backgroundColor: Colors.red,
+          ),
+        );
       }
-    });
+      return;
+    }
+
+    try {
+      // Prepare update data
+      final updateData = {
+        'student_name': updatedAdmission.studentName,
+        'parent_name': updatedAdmission.parentName,
+        'date_of_birth': DateFormat('yyyy-MM-dd').format(updatedAdmission.dateOfBirth),
+        'gender': updatedAdmission.gender,
+        'applying_class': updatedAdmission.applyingClass,
+        'address': updatedAdmission.address,
+        'category': updatedAdmission.category,
+        if (updatedAdmission.email != null) 'email': updatedAdmission.email,
+        if (updatedAdmission.previousSchool != null) 'previous_school': updatedAdmission.previousSchool,
+        if (updatedAdmission.remarks != null) 'remarks': updatedAdmission.remarks,
+      };
+
+      // Call backend API to update using student_id as PK
+      final response = await _apiService.patch(
+        '${Endpoints.admissions}${updatedAdmission.studentId}/',
+        body: updateData,
+      );
+
+      if (response.success && response.data != null) {
+        // Parse the updated admission from response
+        final updated = _parseAdmissionFromJson(response.data);
+        if (updated != null) {
+          setState(() {
+            final index = _allAdmissions.indexWhere((a) => a.studentId == updated.studentId);
+            if (index != -1) {
+              _allAdmissions[index] = updated;
+              _filterAdmissions();
+            }
+          });
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to update: ${response.error ?? "Unknown error"}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error updating admission: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _deleteAdmission(int id) async {
     try {
-      // Call backend API to delete
-      final response = await _apiService.delete('${Endpoints.admissions}$id/');
+      // Find the admission to get student_id
+      final admission = _allAdmissions.firstWhere((a) => a.id == id);
+      
+      // student_id is required - if missing, show error
+      if (admission.studentId == null || admission.studentId!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error: Admission missing student ID'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Call backend API to delete using student_id as PK
+      final response = await _apiService.delete('${Endpoints.admissions}${admission.studentId}/');
 
       if (response.success) {
         // Reload admissions from server
@@ -572,6 +652,22 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
 
       final admission = _allAdmissions[index];
       
+      // student_id is required - if missing, show error
+      if (admission.studentId == null || admission.studentId!.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error: Admission missing student ID'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Use student_id as the primary key for API calls
+      final studentId = admission.studentId!;
+      
       // Generate admission number if approving and not already set
       String? admissionNumber = admission.admissionNumber;
       if (newStatus == 'Approved' && admissionNumber == null) {
@@ -590,9 +686,9 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
         updateData['admission_number'] = admissionNumber;
       }
 
-      // Call backend API to update status
+      // Call backend API to update status using student_id as PK
       final response = await _apiService.patch(
-        '${Endpoints.admissions}$id/',
+        '${Endpoints.admissions}$studentId/',
         body: updateData,
       );
 
@@ -1122,8 +1218,8 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
                 ),
                 const SizedBox(width: 15),
                 Expanded(
-                  child: TextFormField(
-                    controller: _gradeController,
+                  child: DropdownButtonFormField<String>(
+                    value: _selectedGrade,
                     decoration: InputDecoration(
                       labelText: 'Grade (Optional)',
                       border: OutlineInputBorder(
@@ -1132,21 +1228,17 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
                       filled: true,
                       fillColor: Colors.grey[50],
                     ),
-                  ),
-                ),
-                const SizedBox(width: 15),
-                Expanded(
-                  child: TextFormField(
-                    controller: _feesController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: 'Fees (Optional)',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      filled: true,
-                      fillColor: Colors.grey[50],
-                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'A', child: Text('A')),
+                      DropdownMenuItem(value: 'B', child: Text('B')),
+                      DropdownMenuItem(value: 'C', child: Text('C')),
+                      DropdownMenuItem(value: 'D', child: Text('D')),
+                    ],
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedGrade = value;
+                      });
+                    },
                   ),
                 ),
               ],
@@ -1582,12 +1674,11 @@ class _AdmissionsScreenState extends State<AdmissionsScreen> {
       context: context,
       builder: (context) => _AdmissionFormDialog(
         admission: admission,
-        onSave: (updatedAdmission) {
-          _updateAdmission(updatedAdmission);
-          Navigator.of(context).pop();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Application updated successfully!')),
-          );
+        onSave: (updatedAdmission) async {
+          await _updateAdmission(updatedAdmission);
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
         },
       ),
     );
@@ -1951,6 +2042,7 @@ class _AdmissionFormDialogState extends State<_AdmissionFormDialog> {
         category: _category!,
         status: widget.admission?.status ?? 'Pending',
         admissionNumber: widget.admission?.admissionNumber,
+        studentId: widget.admission?.studentId, // Preserve student_id when editing
         email: _emailController.text.trim().isEmpty ? null : _emailController.text.trim(),
         previousSchool: _previousSchoolController.text.trim().isEmpty ? null : _previousSchoolController.text.trim(),
         remarks: _remarksController.text.trim().isEmpty ? null : _remarksController.text.trim(),

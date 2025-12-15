@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'services/api_service.dart' as api;
 // image_picker removed for emulator/demo builds. Image picking is simulated.
 
 void main() {
@@ -152,6 +153,99 @@ class _TeacherProfilePageState extends State<TeacherProfilePage>
   final TextEditingController _subjectController = TextEditingController();
   // image_picker plugin removed in demo; simulate pick behavior instead
 
+  bool _isLoading = true;
+  String? _error;
+
+  Future<void> _loadTeacherData() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      final teacherData = await api.ApiService.fetchTeacherProfile();
+      if (teacherData != null) {
+        _populateDataFromApi(teacherData);
+        setState(() {
+          _isLoading = false;
+        });
+        return;
+      }
+      
+      setState(() {
+        _error = 'No teacher data found';
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = 'Failed to load teacher data: $e';
+        _isLoading = false;
+      });
+      // Fallback to default data if API fails
+      _initializeData();
+    }
+  }
+
+  void _populateDataFromApi(Map<String, dynamic> data) {
+    teacherId = data['teacher_id']?.toString() ?? 'N/A';
+    employeeNo = data['employee_no'] ?? '';
+    firstName = data['first_name'] ?? '';
+    lastName = data['last_name'] ?? '';
+    profileName = '$firstName $lastName'.trim();
+    email = data['email'] ?? '';
+    mobile = data['mobile_no'] ?? '';
+    dateOfBirth = data['dob'] ?? '';
+    gender = data['gender'] ?? '';
+    bloodGroup = data['blood_group'] ?? '';
+    nationality = data['nationality'] ?? '';
+    addressFull = data['address'] ?? '';
+    qualification = data['qualification'] ?? '';
+    designation = data['designation'] ?? '';
+    joiningDate = data['joining_date'] ?? '';
+    department = data['department_name'] ?? '';
+    departmentId = data['department']?.toString() ?? '';
+    primaryRoomId = data['primary_room_id'] ?? '';
+    classTeacherOfSectionId = data['class_teacher_section_id'] ?? '';
+    emergencyContactName = '';
+    emergencyContactRelation = '';
+    emergencyContactPhone = data['emergency_contact'] ?? '';
+    isActive = data['is_active'] ?? true;
+    
+    // Parse subject specialization
+    final specialization = data['subject_specialization'] ?? '';
+    if (specialization is String && specialization.isNotEmpty) {
+      subjectsSpecialization = specialization.split(',').map((s) => s.trim()).toList();
+    } else {
+      subjectsSpecialization = [];
+    }
+    
+    // Set defaults for missing fields
+    middleName = '';
+    religion = '';
+    subCaste = '';
+    addressCity = '';
+    addressState = '';
+    addressCountry = '';
+    postalCode = '';
+    profilePhotoId = '';
+    schoolId = '';
+    userId = data['user']?['user_id']?.toString() ?? '';
+    createdBy = '';
+    createdAt = data['created_at'] ?? '';
+    updatedAt = data['updated_at'] ?? '';
+    employmentStatus = isActive ? 'active' : 'inactive';
+    isClassTeacher = classTeacherOfSectionId.isNotEmpty;
+    availableFrom = '09:00';
+    availableTo = '16:00';
+    workDays = [1, 2, 3, 4, 5];
+    notes = '';
+    assignmentsEnabled = true;
+    examsEnabled = true;
+    parentMessagesEnabled = false;
+    attendanceAlertsEnabled = true;
+    gradeUpdatesEnabled = false;
+  }
+
   void _initializeData() {
     teacherId = 'TID-0001';
     schoolId = 'SCH-01';
@@ -211,8 +305,9 @@ class _TeacherProfilePageState extends State<TeacherProfilePage>
   @override
   void initState() {
     super.initState();
-    _initializeData();
+    _initializeData(); // Set defaults first
     _tabController = TabController(length: 4, vsync: this);
+    _loadTeacherData(); // Then load from API
   }
 
   @override
@@ -256,6 +351,64 @@ class _TeacherProfilePageState extends State<TeacherProfilePage>
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
     final isMobile = width < 700;
+
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          toolbarHeight: 60,
+          flexibleSpace: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF8B47E6), Color(0xFFC764A9)],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+            ),
+          ),
+          title: const Text(
+            'Teacher Profile',
+            style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+          ),
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_error != null) {
+      return Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          toolbarHeight: 60,
+          flexibleSpace: Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFF8B47E6), Color(0xFFC764A9)],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+            ),
+          ),
+          title: const Text(
+            'Teacher Profile',
+            style: TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(_error ?? 'Error loading profile'),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _loadTeacherData,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(

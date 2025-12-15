@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:main_login/main.dart' as main_login;
 import 'dashboard.dart';
+import 'package:core/api/api_service.dart';
+import 'package:core/api/endpoints.dart';
 
 class Examination {
   final int id;
@@ -72,94 +75,13 @@ class ExaminationManagementPage extends StatefulWidget {
 
 class _ExaminationManagementPageState
     extends State<ExaminationManagementPage> {
-  final List<Examination> _allExams = [
-    Examination(
-      id: 1,
-      title: 'Mathematics Mid Term',
-      type: 'mid-term',
-      date: DateTime(2024, 1, 15),
-      time: const TimeOfDay(hour: 9, minute: 0),
-      grade: 'class-10',
-      subject: 'mathematics',
-      durationMinutes: 90,
-      maxMarks: 100,
-      description: 'Mid term examination covering algebra and geometry',
-      location: 'Room 101',
-      status: 'completed',
-    ),
-    Examination(
-      id: 2,
-      title: 'Science Unit Test',
-      type: 'unit-test',
-      date: DateTime(2024, 1, 20),
-      time: const TimeOfDay(hour: 10, minute: 30),
-      grade: 'class-8',
-      subject: 'science',
-      durationMinutes: 60,
-      maxMarks: 50,
-      description: 'Unit test on chemical reactions',
-      location: 'Lab 2',
-      status: 'upcoming',
-    ),
-    Examination(
-      id: 3,
-      title: 'English Final Exam',
-      type: 'final',
-      date: DateTime(2024, 1, 25),
-      time: const TimeOfDay(hour: 14, minute: 0),
-      grade: 'class-12',
-      subject: 'english',
-      durationMinutes: 120,
-      maxMarks: 100,
-      description: 'Final examination covering literature and grammar',
-      location: 'Hall A',
-      status: 'upcoming',
-    ),
-    Examination(
-      id: 4,
-      title: 'Computer Science Practical',
-      type: 'practical',
-      date: DateTime(2024, 1, 18),
-      time: const TimeOfDay(hour: 11, minute: 0),
-      grade: 'class-11',
-      subject: 'computer-science',
-      durationMinutes: 90,
-      maxMarks: 50,
-      description: 'Practical examination on programming',
-      location: 'Computer Lab',
-      status: 'ongoing',
-    ),
-    Examination(
-      id: 5,
-      title: 'Physics Project',
-      type: 'project',
-      date: DateTime(2024, 1, 22),
-      time: const TimeOfDay(hour: 15, minute: 30),
-      grade: 'class-9',
-      subject: 'physics',
-      durationMinutes: 180,
-      maxMarks: 30,
-      description: 'Project presentation on mechanics',
-      location: 'Room 205',
-      status: 'upcoming',
-    ),
-    Examination(
-      id: 6,
-      title: 'History Unit Test',
-      type: 'unit-test',
-      date: DateTime(2024, 1, 12),
-      time: const TimeOfDay(hour: 8, minute: 0),
-      grade: 'class-7',
-      subject: 'social-studies',
-      durationMinutes: 45,
-      maxMarks: 25,
-      description: 'Unit test on ancient civilizations',
-      location: 'Room 103',
-      status: 'completed',
-    ),
-  ];
-
+  List<Examination> _allExams = [];
   late List<Examination> _visibleExams;
+  
+  final ApiService _apiService = ApiService();
+  bool _isLoading = false;
+  bool _isSubmitting = false;
+  Timer? _statusCheckTimer;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
   final _formKey = GlobalKey<FormState>();
@@ -183,6 +105,11 @@ class _ExaminationManagementPageState
   void initState() {
     super.initState();
     _visibleExams = List<Examination>.from(_allExams);
+    _loadExaminations();
+    // Start periodic status checking (every minute)
+    _statusCheckTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _checkAndUpdateExamStatuses();
+    });
   }
 
   @override
@@ -192,7 +119,265 @@ class _ExaminationManagementPageState
     _marksController.dispose();
     _descriptionController.dispose();
     _locationController.dispose();
+    _statusCheckTimer?.cancel();
     super.dispose();
+  }
+
+  // -- API Methods --
+  
+  Future<void> _loadExaminations() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final response = await _apiService.get(Endpoints.examinations);
+
+      if (response.success && response.data != null) {
+        List<Examination> exams = [];
+        
+        // Handle different response formats
+        dynamic data = response.data;
+        
+        // If response is a list, use it directly
+        if (data is List) {
+          for (var item in data) {
+            if (item is Map<String, dynamic>) {
+              final exam = _parseExaminationFromJson(item);
+              if (exam != null) {
+                exams.add(exam);
+              }
+            }
+          }
+        }
+        // If response is an object with a 'results' field (pagination)
+        else if (data is Map<String, dynamic>) {
+          if (data['results'] != null && data['results'] is List) {
+            for (var item in data['results'] as List) {
+              if (item is Map<String, dynamic>) {
+                final exam = _parseExaminationFromJson(item);
+                if (exam != null) {
+                  exams.add(exam);
+                }
+              }
+            }
+          }
+          // If data itself is a list-like structure
+          else if (data['data'] != null && data['data'] is List) {
+            for (var item in data['data'] as List) {
+              if (item is Map<String, dynamic>) {
+                final exam = _parseExaminationFromJson(item);
+                if (exam != null) {
+                  exams.add(exam);
+                }
+              }
+            }
+          }
+        }
+
+        setState(() {
+          _allExams = exams;
+          _filterExams();
+        });
+        
+        // Check and update statuses immediately after loading
+        _checkAndUpdateExamStatuses();
+      } else {
+        // Handle error
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to load examinations: ${response.error ?? "Unknown error"}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error loading examinations: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Examination? _parseExaminationFromJson(Map<String, dynamic> json) {
+    try {
+      // Parse dates and times from backend format
+      DateTime? examDate;
+      TimeOfDay? examTime;
+      
+      // Parse Exam_Date (DateTime field)
+      if (json['Exam_Date'] != null) {
+        if (json['Exam_Date'] is String) {
+          examDate = DateTime.tryParse(json['Exam_Date']);
+        } else if (json['Exam_Date'] is DateTime) {
+          examDate = json['Exam_Date'];
+        }
+      }
+      
+      // Parse Exam_Time (Time field)
+      if (json['Exam_Time'] != null) {
+        if (json['Exam_Time'] is String) {
+          // Parse time string (format: "HH:MM:SS" or "HH:MM")
+          final timeStr = json['Exam_Time'] as String;
+          final timeParts = timeStr.split(':');
+          if (timeParts.length >= 2) {
+            final hour = int.tryParse(timeParts[0]) ?? 0;
+            final minute = int.tryParse(timeParts[1]) ?? 0;
+            examTime = TimeOfDay(hour: hour, minute: minute);
+          }
+        }
+      }
+      
+      // If Exam_Date contains time info, extract it
+      if (examDate != null && examTime == null) {
+        examTime = TimeOfDay(hour: examDate.hour, minute: examDate.minute);
+        // Reset date to just the date part
+        examDate = DateTime(examDate.year, examDate.month, examDate.day);
+      }
+      
+      // Default values
+      examDate ??= DateTime.now();
+      examTime ??= TimeOfDay.now();
+
+      return Examination(
+        id: json['id'] ?? 0,
+        title: json['Exam_Title'] ?? '',
+        type: json['Exam_Type'] ?? '',
+        date: examDate,
+        time: examTime,
+        grade: json['Exam_Class'] ?? json['Exam_Grade'] ?? json['grade'] ?? '', // Handle multiple formats
+        subject: json['Exam_Subject'] ?? json['subject'] ?? '', // Handle both formats
+        durationMinutes: json['Exam_Duration'] ?? 0,
+        maxMarks: json['Exam_Marks'] ?? 0,
+        description: json['Exam_Description'] ?? '',
+        location: json['Exam_Location'] ?? '',
+        status: json['Exam_Status'] ?? 'upcoming',
+      );
+    } catch (e) {
+      print('Error parsing examination: $e');
+      return null;
+    }
+  }
+
+  Map<String, dynamic> _examinationToJson(Examination exam) {
+    // Combine date and time into a single DateTime for Exam_Date
+    final examDateTime = DateTime(
+      exam.date.year,
+      exam.date.month,
+      exam.date.day,
+      exam.time.hour,
+      exam.time.minute,
+    );
+
+    return {
+      'Exam_Title': exam.title,
+      'Exam_Type': exam.type,
+      'Exam_Date': examDateTime.toIso8601String(),
+      'Exam_Time': '${exam.time.hour.toString().padLeft(2, '0')}:${exam.time.minute.toString().padLeft(2, '0')}:00',
+      'Exam_Subject': exam.subject,
+      'Exam_Class': exam.grade,
+      'Exam_Duration': exam.durationMinutes,
+      'Exam_Marks': exam.maxMarks,
+      'Exam_Description': exam.description,
+      'Exam_Location': exam.location,
+      'Exam_Status': exam.status,
+    };
+  }
+
+  // Check and update exam statuses based on current time
+  Future<void> _checkAndUpdateExamStatuses() async {
+    if (!mounted || _allExams.isEmpty) return;
+    
+    final now = DateTime.now();
+    List<Map<String, dynamic>> updates = []; // Store {id, newStatus}
+    
+    for (var exam in _allExams) {
+      // Only check upcoming and ongoing exams (skip completed)
+      if (exam.status == 'completed') continue;
+      
+      // Create exam start DateTime
+      final examStartDateTime = DateTime(
+        exam.date.year,
+        exam.date.month,
+        exam.date.day,
+        exam.time.hour,
+        exam.time.minute,
+      );
+      
+      // Calculate exam end time
+      final examEndDateTime = examStartDateTime.add(
+        Duration(minutes: exam.durationMinutes),
+      );
+      
+      String? newStatus;
+      
+      // Check if exam should be ongoing
+      if (exam.status == 'upcoming' && 
+          now.isAfter(examStartDateTime.subtract(const Duration(seconds: 1))) && 
+          now.isBefore(examEndDateTime)) {
+        newStatus = 'ongoing';
+      }
+      // Check if exam should be completed
+      else if (now.isAfter(examEndDateTime.subtract(const Duration(seconds: 1)))) {
+        newStatus = 'completed';
+      }
+      
+      // Only update if status actually changed
+      if (newStatus != null && newStatus != exam.status) {
+        updates.add({'id': exam.id, 'status': newStatus, 'exam': exam});
+      }
+    }
+    
+    // Update database and local state
+    if (updates.isNotEmpty) {
+      // Update in database
+      for (var update in updates) {
+        await _updateExamStatus(update['id'], update['status']);
+      }
+      
+      // Update local state
+      if (mounted) {
+        setState(() {
+          for (var update in updates) {
+            final exam = update['exam'] as Examination;
+            final newStatus = update['status'] as String;
+            final index = _allExams.indexWhere((e) => e.id == exam.id);
+            if (index != -1) {
+              _allExams[index] = exam.copyWith(status: newStatus);
+            }
+          }
+          _filterExams();
+        });
+      }
+    }
+  }
+
+  // Update exam status in the database
+  Future<void> _updateExamStatus(int examId, String newStatus) async {
+    try {
+      final response = await _apiService.patch(
+        '${Endpoints.examinations}$examId/',
+        body: {'Exam_Status': newStatus},
+      );
+      
+      if (!response.success) {
+        print('Failed to update exam status: ${response.error}');
+      }
+    } catch (e) {
+      print('Error updating exam status: $e');
+    }
   }
 
   void _filterExams() {
@@ -254,7 +439,7 @@ class _ExaminationManagementPageState
     }
   }
 
-  void _addExam() {
+  Future<void> _addExam() async {
     if (!_formKey.currentState!.validate()) return;
     if (_newType == null ||
         _newClass == null ||
@@ -267,8 +452,9 @@ class _ExaminationManagementPageState
       return;
     }
 
+    // Prepare exam data
     final exam = Examination(
-      id: DateTime.now().millisecondsSinceEpoch,
+      id: 0, // Will be set by backend
       title: _titleController.text.trim(),
       type: _newType!,
       date: _newDate!,
@@ -283,27 +469,74 @@ class _ExaminationManagementPageState
     );
 
     setState(() {
-      _allExams.insert(0, exam);
-      _filterExams();
+      _isSubmitting = true;
     });
 
-    _formKey.currentState!.reset();
-    _titleController.clear();
-    _durationController.clear();
-    _marksController.clear();
-    _descriptionController.clear();
-    _locationController.clear();
-    setState(() {
-      _newType = null;
-      _newClass = null;
-      _newSubject = null;
-      _newDate = null;
-      _newTime = null;
-    });
+    try {
+      // Convert to backend format
+      final examData = _examinationToJson(exam);
+      
+      // Call API to create examination
+      final response = await _apiService.post(
+        Endpoints.examinations,
+        body: examData,
+      );
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Examination added successfully!')),
-    );
+      if (response.success && response.data != null) {
+        // Parse the created exam from response
+        final createdExam = _parseExaminationFromJson(response.data);
+        
+        if (createdExam != null) {
+          setState(() {
+            _allExams.insert(0, createdExam);
+            _filterExams();
+          });
+
+          // Clear form
+          _formKey.currentState!.reset();
+          _titleController.clear();
+          _durationController.clear();
+          _marksController.clear();
+          _descriptionController.clear();
+          _locationController.clear();
+          setState(() {
+            _newType = null;
+            _newClass = null;
+            _newSubject = null;
+            _newDate = null;
+            _newTime = null;
+          });
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Examination added successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } else {
+          throw Exception('Failed to parse created examination');
+        }
+      } else {
+        throw Exception(response.error ?? 'Failed to create examination');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error adding examination: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
   }
 
   @override
@@ -414,6 +647,7 @@ class _ExaminationManagementPageState
                                           _descriptionController,
                                       locationController: _locationController,
                                       onSubmit: _addExam,
+                                      isSubmitting: _isSubmitting,
                                     ),
                                   ),
                                   SizedBox(
@@ -439,6 +673,7 @@ class _ExaminationManagementPageState
                                         _filterExams();
                                       },
                                       exams: _visibleExams,
+                                      isLoading: _isLoading,
                                     ),
                                   ),
                                 ],
@@ -876,7 +1111,8 @@ class _AddExamSection extends StatelessWidget {
   final TextEditingController marksController;
   final TextEditingController descriptionController;
   final TextEditingController locationController;
-  final VoidCallback onSubmit;
+  final Future<void> Function() onSubmit;
+  final bool isSubmitting;
 
   const _AddExamSection({
     required this.formKey,
@@ -896,6 +1132,7 @@ class _AddExamSection extends StatelessWidget {
     required this.descriptionController,
     required this.locationController,
     required this.onSubmit,
+    required this.isSubmitting,
   });
 
   @override
@@ -1028,7 +1265,7 @@ class _AddExamSection extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: onSubmit,
+                onPressed: isSubmitting ? null : onSubmit,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF667EEA),
                   foregroundColor: Colors.white,
@@ -1037,7 +1274,16 @@ class _AddExamSection extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
-                child: const Text('Add Examination'),
+                child: isSubmitting
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Text('Add Examination'),
               ),
             ),
           ],
@@ -1178,6 +1424,7 @@ class _SearchFilterSection extends StatelessWidget {
   final String? classFilter;
   final ValueChanged<String?> onClassChanged;
   final List<Examination> exams;
+  final bool isLoading;
 
   const _SearchFilterSection({
     required this.searchQuery,
@@ -1187,6 +1434,7 @@ class _SearchFilterSection extends StatelessWidget {
     required this.classFilter,
     required this.onClassChanged,
     required this.exams,
+    required this.isLoading,
   });
 
   @override
@@ -1264,7 +1512,38 @@ class _SearchFilterSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 24),
-          _ExamGrid(exams: exams),
+          if (isLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32.0),
+                child: CircularProgressIndicator(),
+              ),
+            )
+          else if (exams.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32.0),
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.assignment_outlined,
+                      size: 64,
+                      color: Colors.grey.shade400,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'No examinations found',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            )
+          else
+            _ExamGrid(exams: exams),
         ],
       ),
     );

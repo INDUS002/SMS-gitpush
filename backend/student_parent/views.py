@@ -2,7 +2,7 @@
 Views for student_parent app - API layer for App 4
 """
 from rest_framework import viewsets, status, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
@@ -14,6 +14,7 @@ from .serializers import (
 )
 from main_login.permissions import IsStudentParent
 from management_admin.models import Student
+from management_admin.serializers import StudentSerializer
 
 
 class ParentViewSet(viewsets.ReadOnlyModelViewSet):
@@ -184,4 +185,19 @@ class StudentDashboardViewSet(viewsets.ViewSet):
                 {'error': 'Student profile not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_profile(request):
+    """Get current logged-in student's profile"""
+    try:
+        student = Student.objects.get(user=request.user)
+        serializer = StudentSerializer(student)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Student.DoesNotExist:
+        return Response(
+            {'error': 'Student profile not found for this user'},
+            status=status.HTTP_404_NOT_FOUND
+        )
 

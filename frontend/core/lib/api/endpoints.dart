@@ -24,9 +24,9 @@ class Endpoints {
   static const String departments = '/management-admin/departments/';
   static const String buses = '/management/buses';
   static const String busRoutes = '/management/bus-routes';
-  static const String fees = '/management/fees';
+  static const String fees = '/management-admin/fees/';
   static const String admissions = '/management-admin/admissions/';
-  static const String examinations = '/management/examinations';
+  static const String examinations = '/management-admin/examinations/';
   static const String events = '/management/events';
   static const String activities = '/management/activities';
   static const String awards = '/management/awards';

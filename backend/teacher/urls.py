@@ -19,5 +19,6 @@ router.register(r'study-materials', views.StudyMaterialViewSet, basename='studym
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('profile/', views.teacher_profile, name='teacher-profile'),
 ]
 

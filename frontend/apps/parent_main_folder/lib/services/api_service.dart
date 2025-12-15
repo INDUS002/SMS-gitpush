@@ -93,4 +93,20 @@ class ApiService {
       throw Exception('Failed to fetch student: $e');
     }
   }
+
+  /// Fetch current logged-in student's profile
+  static Future<Map<String, dynamic>?> fetchStudentProfile() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('$parentBase/student-profile/'),
+              headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        return jsonDecode(resp.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      throw Exception('Failed to fetch student profile: $e');
+    }
+  }
 }

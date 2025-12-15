@@ -719,38 +719,22 @@ class _StudentProfilePageState extends State<StudentProfilePage> {
     });
 
     try {
-      // Fetch parent profile to get associated students
-      final parentData = await api.ApiService.fetchParentProfile();
-      if (parentData != null && parentData['students'] != null) {
-        final students = parentData['students'];
-        if (students is List && students.isNotEmpty) {
-          // Use any available student from the database
-          // If multiple students exist, we'll use the first one available
-          final studentData = students[0];
-          if (studentData is Map<String, dynamic>) {
-            final studentId = studentData['id'];
-            int? id;
-            if (studentId is int) {
-              id = studentId;
-            } else if (studentId is String) {
-              id = int.tryParse(studentId);
-            } else if (studentId != null) {
-              id = int.tryParse(studentId.toString());
-            }
-            
-            if (id != null) {
-              // Fetch full student details
-              final fullStudentData = await api.ApiService.fetchStudentById(id);
-              if (fullStudentData != null) {
-                setState(() {
-                  _studentData = StudentData.fromJson(fullStudentData, parentData);
-                  _isLoading = false;
-                });
-                return;
-              }
-            }
-          }
+      // Fetch current logged-in student's profile
+      final studentData = await api.ApiService.fetchStudentProfile();
+      if (studentData != null) {
+        // Try to get parent data for additional context (optional)
+        Map<String, dynamic>? parentData;
+        try {
+          parentData = await api.ApiService.fetchParentProfile();
+        } catch (e) {
+          // Parent data is optional, continue without it
         }
+        
+        setState(() {
+          _studentData = StudentData.fromJson(studentData, parentData ?? {});
+          _isLoading = false;
+        });
+        return;
       }
       
       setState(() {

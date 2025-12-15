@@ -2,7 +2,7 @@
 Views for teacher app - API layer for App 3
 """
 from rest_framework import viewsets, status, filters
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
@@ -18,6 +18,7 @@ from .serializers import (
 )
 from main_login.permissions import IsTeacher
 from management_admin.models import Teacher
+from management_admin.serializers import TeacherSerializer
 
 
 class ClassViewSet(viewsets.ModelViewSet):
@@ -154,4 +155,19 @@ class StudyMaterialViewSet(viewsets.ModelViewSet):
             return StudyMaterial.objects.filter(teacher=teacher)
         except Teacher.DoesNotExist:
             return StudyMaterial.objects.none()
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def teacher_profile(request):
+    """Get current logged-in teacher's profile"""
+    try:
+        teacher = Teacher.objects.get(user=request.user)
+        serializer = TeacherSerializer(teacher)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Teacher.DoesNotExist:
+        return Response(
+            {'error': 'Teacher profile not found for this user'},
+            status=status.HTTP_404_NOT_FOUND
+        )
 

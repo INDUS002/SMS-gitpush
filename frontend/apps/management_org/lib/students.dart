@@ -52,7 +52,7 @@ class Student {
   final int id;
   final String name;
   final String studentClass;
-  final String section;
+  final String grade;
   final String bloodGroup;
   final String initials;
   final String parentsName;
@@ -60,7 +60,7 @@ class Student {
   final String email;
   final String address;
   final String admissionDate;
-  final String rollNumber;
+  final String studentId;
   final double attendance;
   final String busRoute;
   final String emergencyContact;
@@ -74,7 +74,7 @@ class Student {
     required this.id,
     required this.name,
     required this.studentClass,
-    required this.section,
+    required this.grade,
     required this.bloodGroup,
     required this.initials,
     required this.parentsName,
@@ -82,7 +82,7 @@ class Student {
     required this.email,
     required this.address,
     required this.admissionDate,
-    required this.rollNumber,
+    required this.studentId,
     required this.attendance,
     required this.busRoute,
     required this.emergencyContact,
@@ -99,24 +99,43 @@ class Student {
     final lastName = json['user']?['last_name'] as String? ?? '';
     final fullName = '$firstName $lastName'.trim();
 
+    // Parse fee amounts from API
+    final totalFeeAmount = (json['total_fee_amount'] as num?)?.toDouble() ?? 0.0;
+    final paidFeeAmount = (json['paid_fee_amount'] as num?)?.toDouble() ?? 0.0;
+    final dueFeeAmount = (json['due_fee_amount'] as num?)?.toDouble() ?? 0.0;
+    final feesCount = json['fees_count'] as int? ?? 0;
+    
+    // Determine fee status
+    String feeStatus = '';
+    if (dueFeeAmount > 0) {
+      feeStatus = 'Due: ₹${dueFeeAmount.toStringAsFixed(0)}';
+    } else if (totalFeeAmount > 0) {
+      feeStatus = 'Paid';
+    } else {
+      feeStatus = 'No Fees';
+    }
+
     return Student(
       id: json['id'] as int? ?? 0,
-      name: fullName.isNotEmpty ? fullName : 'Unknown Student',
-      studentClass: json['class_name'] as String? ?? '',
-      section: json['section'] as String? ?? '',
+      name: fullName.isNotEmpty ? fullName : json['student_name'] as String? ?? 'Unknown Student',
+      studentClass: json['applying_class'] as String? ?? json['class_name'] as String? ?? '',
+      grade: json['grade'] as String? ?? '',
       bloodGroup: json['blood_group'] as String? ?? '',
-      initials: _getInitials(firstName, lastName),
+      initials: _getInitials(
+        firstName.isNotEmpty ? firstName : (json['student_name'] as String? ?? '').split(' ').first,
+        lastName.isNotEmpty ? lastName : (json['student_name'] as String? ?? '').split(' ').last,
+      ),
       parentsName: json['parent_name'] as String? ?? '',
       contact: json['parent_phone'] as String? ?? '',
       email:
           json['email'] as String? ?? json['user']?['email'] as String? ?? '',
       address: json['address'] as String? ?? '',
       admissionDate: json['admission_date'] as String? ?? '',
-      rollNumber: json['student_id'] as String? ?? '',
+      studentId: json['student_id']?.toString() ?? '',
       attendance: 0.0,
       busRoute: '',
       emergencyContact: json['emergency_contact'] as String? ?? '',
-      medicalInfo: json['medical_info'] as String? ?? '',
+      medicalInfo: json['medical_information'] as String? ?? '',
       status: 'Active',
       academics: const StudentAcademics(
         overallScore: '0%',
@@ -130,7 +149,12 @@ class Student {
         achievements: '',
         participation: '',
       ),
-      fees: const StudentFees(total: '₹0', paid: '₹0', due: '₹0', status: ''),
+      fees: StudentFees(
+        total: '₹${totalFeeAmount.toStringAsFixed(0)}',
+        paid: '₹${paidFeeAmount.toStringAsFixed(0)}',
+        due: '₹${dueFeeAmount.toStringAsFixed(0)}',
+        status: feeStatus,
+      ),
     );
   }
 
@@ -225,7 +249,7 @@ class _StudentsManagementPageState extends State<StudentsManagementPage> {
             query.isEmpty ||
             student.name.toLowerCase().contains(query) ||
             student.studentClass.toLowerCase().contains(query) ||
-            student.rollNumber.toLowerCase().contains(query);
+            student.studentId.toLowerCase().contains(query);
         final matchesClass =
             selectedClass == null ||
             selectedClass.isEmpty ||
@@ -374,12 +398,16 @@ class _StudentsManagementPageState extends State<StudentsManagementPage> {
         ),
         const SizedBox(height: 5),
         Text(
-          '${student.studentClass} • Section ${student.section}',
+          student.grade.isNotEmpty 
+            ? '${student.studentClass} • Grade ${student.grade}'
+            : student.studentClass,
           style: const TextStyle(color: Color(0xFF666666)),
         ),
         const SizedBox(height: 5),
         Text(
-          'Roll: ${student.rollNumber}',
+          student.studentId.isNotEmpty 
+            ? 'Student ID: ${student.studentId}'
+            : 'Student ID: N/A',
           style: const TextStyle(
             color: Color(0xFF667EEA),
             fontWeight: FontWeight.w600,
@@ -410,9 +438,9 @@ class _StudentsManagementPageState extends State<StudentsManagementPage> {
           title: 'Academic Information',
           items: [
             'Class: ${student.studentClass}',
-            'Section: ${student.section}',
-            'Roll Number: ${student.rollNumber}',
-            'Admission Date: ${student.admissionDate}',
+            if (student.grade.isNotEmpty) 'Grade: ${student.grade}',
+            'Student ID: ${student.studentId.isNotEmpty ? student.studentId : "N/A"}',
+            if (student.admissionDate.isNotEmpty) 'Admission Date: ${student.admissionDate}',
           ],
         ),
         _DetailCard(
@@ -1125,7 +1153,9 @@ class _StudentCardWithHoverState extends State<_StudentCardWithHover> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${widget.student.studentClass} • Section ${widget.student.section} • Roll: ${widget.student.rollNumber}',
+                          widget.student.grade.isNotEmpty
+                            ? '${widget.student.studentClass} • Grade ${widget.student.grade} • Student ID: ${widget.student.studentId}'
+                            : '${widget.student.studentClass} • Student ID: ${widget.student.studentId}',
                           style: const TextStyle(
                             fontSize: 13,
                             color: Color(0xFF666666),

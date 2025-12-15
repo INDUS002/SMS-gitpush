@@ -37,5 +37,21 @@ class ApiService {
     }
     throw Exception('Failed to fetch teachers: ${resp.statusCode}');
   }
+
+  /// Fetch current logged-in teacher's profile
+  static Future<Map<String, dynamic>?> fetchTeacherProfile() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('http://localhost:8000/api/teacher/profile/'),
+              headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        return jsonDecode(resp.body) as Map<String, dynamic>;
+      }
+      return null;
+    } catch (e) {
+      throw Exception('Failed to fetch teacher profile: $e');
+    }
+  }
 }
 

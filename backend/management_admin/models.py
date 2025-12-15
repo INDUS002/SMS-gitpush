@@ -115,7 +115,19 @@ class Student(models.Model):
         ('Other', 'Other'),
     ]
 
-    student_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    # Email is now the primary key
+    email = models.EmailField(
+        primary_key=True,
+        help_text='Primary key and used as login credential if account created'
+    )
+
+    # Student ID fetched from NewAdmission
+    student_id = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Student ID fetched from new_admissions table"
+    )
 
     # Login reference (optional)
     user = models.ForeignKey(
@@ -137,6 +149,7 @@ class Student(models.Model):
     date_of_birth = models.DateField(default=date(2000, 1, 1))
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES, default="Male")
     applying_class = models.CharField(max_length=50, default="")
+    grade = models.CharField(max_length=50, null=True, blank=True, help_text="Grade/Level of the student")
     address = models.TextField(default="Address not provided")
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default="General")
 
@@ -146,12 +159,6 @@ class Student(models.Model):
         null=True, 
         blank=True,
         help_text="Generated after approval"
-    )
-
-    email = models.EmailField(
-        unique=True,
-        default="",
-        help_text='Used as login credential if account created'
     )
 
     parent_phone = models.CharField(max_length=20, null=True, blank=True)
@@ -206,19 +213,25 @@ class NewAdmission(models.Model):
         ('Other', 'Other'),
     ]
     
+    GRADE_CHOICES = [
+        ('A', 'A'),
+        ('B', 'B'),
+        ('C', 'C'),
+        ('D', 'D'),
+    ]
+    
     # Same fields as Student model
     student_name = models.CharField(max_length=255)
     parent_name = models.CharField(max_length=255)
     date_of_birth = models.DateField()
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES)
     applying_class = models.CharField(max_length=50)
-    grade = models.CharField(max_length=50, null=True, blank=True, help_text="Grade/Level of the student")
-    fees = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Admission fees")
+    grade = models.CharField(max_length=1, choices=GRADE_CHOICES, null=True, blank=True, help_text="Grade of the student (A, B, C, or D)")
     address = models.TextField(default = "Address not provided")
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default = "")
     
-    # Student ID field
-    student_id = models.CharField(max_length=100, null=True, blank=True, help_text="Student ID (can be provided during admission)")
+    # Student ID field - Primary Key
+    student_id = models.CharField(max_length=100, primary_key=True, help_text="Student ID (Primary Key)")
     
     # Status field - unique to NewAdmission (not in Student)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
@@ -301,10 +314,15 @@ class NewAdmission(models.Model):
         if existing_student:
             # Student already exists, update it with latest admission data
             for field in ['student_name', 'parent_name', 'date_of_birth', 'gender', 
-                         'applying_class', 'address', 'category',
+                         'applying_class', 'grade', 'address', 'category',
                          'parent_phone', 'emergency_contact', 'medical_information',
                          'blood_group', 'previous_school', 'remarks']:
-                setattr(existing_student, field, getattr(self, field, None))
+                if hasattr(self, field):
+                    setattr(existing_student, field, getattr(self, field, None))
+            
+            # Update student_id from NewAdmission
+            if self.student_id:
+                existing_student.student_id = self.student_id
             
             # Note: user link is no longer stored in NewAdmission
             
@@ -342,11 +360,13 @@ class NewAdmission(models.Model):
         
         student_data = {
             'school': default_school,
+            'student_id': self.student_id,  # Fetch student_id from NewAdmission
             'student_name': self.student_name,
             'parent_name': self.parent_name,
             'date_of_birth': self.date_of_birth,
             'gender': self.gender,
             'applying_class': self.applying_class,
+            'grade': self.grade if hasattr(self, 'grade') else None,
             'address': self.address or "Address not provided",
             'category': self.category or "General",
             'admission_number': admission_number,
@@ -401,3 +421,155 @@ class DashboardStats(models.Model):
         verbose_name = 'Dashboard Statistics'
         verbose_name_plural = 'Dashboard Statistics'
 
+class Examination_management(models.Model):
+    """Examination management model"""
+    Exam_Title = models.CharField(max_length=255)
+    Exam_Type = models.CharField(max_length=255)
+    Exam_Date = models.DateTimeField()
+    Exam_Time = models.TimeField()
+    Exam_Subject = models.CharField(max_length=255, blank=True, default='')
+    Exam_Class = models.CharField(max_length=255, blank=True, default='')
+    Exam_Duration = models.IntegerField()
+    Exam_Marks = models.IntegerField()
+    Exam_Description = models.TextField(blank=True)
+    Exam_Location = models.CharField(max_length=255)
+    Exam_Status = models.CharField(max_length=255)
+    Exam_Created_At = models.DateTimeField(auto_now_add=True)
+    Exam_Updated_At = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.Exam_Title} - {self.Exam_Type}"
+    
+    class Meta:
+        db_table = 'examination_management'
+        verbose_name = 'Examination Management'
+        verbose_name_plural = 'Examination Management'
+        ordering = ['-Exam_Created_At']
+
+
+class Fee(models.Model):
+    """Fee management model"""
+    
+    FEE_TYPE_CHOICES = [
+        ('tuition', 'Tuition'),
+        ('transport', 'Transport'),
+        ('laboratory', 'Laboratory'),
+        ('examination', 'Examination'),
+        ('library', 'Library'),
+        ('sports', 'Sports'),
+        ('hostel', 'Hostel'),
+        ('uniform', 'Uniform'),
+        ('other', 'Other'),
+    ]
+    
+    FREQUENCY_CHOICES = [
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('half-yearly', 'Half-Yearly'),
+        ('yearly', 'Yearly'),
+        ('one-time', 'One-Time'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('paid', 'Paid'),
+        ('overdue', 'Overdue'),
+    ]
+    
+    # Note: Django automatically creates a 'student_id' field for the ForeignKey
+    # We'll add a custom 'student_id_string' field to store the student ID as a string
+    student_id_string = models.CharField(
+        max_length=100,
+        db_index=True,
+        default='',
+        blank=True,
+        help_text='Student ID as string (e.g., STUD-005) - indexed for faster lookups'
+    )
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.CASCADE,
+        related_name='management_fees',
+        help_text='Student associated with this fee'
+    )
+    student_name = models.CharField(max_length=255, blank=True, help_text='Student name (auto-populated from student)')
+    applying_class = models.CharField(max_length=50, blank=True, help_text='Student class (auto-populated from student)')
+    fee_type = models.CharField(max_length=50, choices=FEE_TYPE_CHOICES, default='tuition')
+    grade = models.CharField(max_length=50, help_text='Grade of the student (A, B, C, D)')
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text='Total amount of the fee')
+    frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES, default='monthly')
+    due_date = models.DateField()
+    late_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text='Late fee amount if payment is delayed')
+    description = models.TextField(blank=True, help_text='Additional description for the fee')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    paid_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text='Total amount paid so far (sum of all payments)')
+    due_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00, help_text='Amount due (remaining to be paid)')
+    last_paid_date = models.DateField(null=True, blank=True, help_text='Date of last payment')
+    
+    def save(self, *args, **kwargs):
+        """Auto-calculate fields when saving"""
+        # Auto-populate student_id_string from student if not set
+        if self.student and not self.student_id_string:
+            self.student_id_string = self.student.student_id or ''
+        
+        # Auto-populate student_name and applying_class from student if not set
+        if self.student:
+            if not self.student_name:
+                self.student_name = self.student.student_name or ''
+            if not self.applying_class:
+                self.applying_class = self.student.applying_class or ''
+            # Auto-populate grade from student if not set
+            if not self.grade and hasattr(self.student, 'grade') and self.student.grade:
+                self.grade = self.student.grade
+        
+        # Calculate due_amount: total_amount - paid_amount (always recalculate)
+        from decimal import Decimal
+        self.due_amount = Decimal(str(self.total_amount)) - Decimal(str(self.paid_amount))
+        
+        # Update status based on payment
+        if self.paid_amount >= self.total_amount:
+            self.status = 'paid'
+        elif self.paid_amount > 0:
+            self.status = 'pending'
+        else:
+            self.status = 'pending'
+        
+        super().save(*args, **kwargs)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.student.student_name} - {self.get_fee_type_display()} - {self.total_amount}"
+    
+    class Meta:
+        db_table = 'management_fees'
+        verbose_name = 'Fee'
+        verbose_name_plural = 'Fees'
+        ordering = ['-due_date', '-created_at']
+        # Note: student_id is the primary key, but a student can have multiple fees
+        # Consider using a composite key (student_id, fee_type, due_date) if needed
+
+
+class PaymentHistory(models.Model):
+    """Model to track individual payment transactions for fees"""
+    fee = models.ForeignKey(
+        Fee,
+        on_delete=models.CASCADE,
+        related_name='payment_history',
+        help_text='Fee associated with this payment'
+    )
+    payment_amount = models.DecimalField(max_digits=10, decimal_places=2, help_text='Amount paid in this transaction')
+    payment_date = models.DateField(help_text='Date when payment was made')
+    receipt_number = models.CharField(max_length=100, blank=True, help_text='Receipt number for this payment')
+    notes = models.TextField(blank=True, help_text='Additional notes for this payment')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"{self.fee.student_name} - ₹{self.payment_amount} on {self.payment_date}"
+    
+    class Meta:
+        db_table = 'payment_history'
+        verbose_name = 'Payment History'
+        verbose_name_plural = 'Payment Histories'
+        ordering = ['-payment_date', '-created_at']
