@@ -81,7 +81,7 @@ class School {
       principal: json['principal_name'] as String?,
       students: stats != null ? (stats['total_students'] as int? ?? 0) : 0,
       teachers: stats != null ? (stats['total_teachers'] as int? ?? 0) : 0,
-      buses: 0, // Not in backend model, default to 0
+      buses: stats != null ? (stats['total_buses'] as int? ?? 0) : 0, // Real-time count from database
       status: json['status'] as String? ?? 'active',
       established: establishedYear?.toString(),
       email: json['email'] as String?,

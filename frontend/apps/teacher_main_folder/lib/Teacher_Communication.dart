@@ -1,173 +1,9 @@
-// main.dart
-// Full Flutter app (mobile-first) with:
-// - Real AppBar matching: ←  Teacher Communication      ⟳   👤
-// - Sidebar contacts, chat UI, typing indicator, search/filter, online badges
-// - Dark mode toggle, smooth animations
-// - Mock backend stubs (Firebase/API left as TODO)
-// - Mobile & desktop responsive and overflow-fixed
-
 import 'dart:async';
-import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-
-void main() {
-  runApp(const TeacherCommunicationApp());
-}
-
-class TeacherCommunicationApp extends StatefulWidget {
-  const TeacherCommunicationApp({super.key});
-
-  @override
-  State<TeacherCommunicationApp> createState() =>
-      _TeacherCommunicationAppState();
-}
-
-class _TeacherCommunicationAppState extends State<TeacherCommunicationApp> {
-  ThemeMode _themeMode = ThemeMode.light;
-
-  void toggleTheme() => setState(() {
-    _themeMode = _themeMode == ThemeMode.light
-        ? ThemeMode.dark
-        : ThemeMode.light;
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Teacher Communication',
-      debugShowCheckedModeBanner: false,
-      themeMode: _themeMode,
-      theme: ThemeData(
-        brightness: Brightness.light,
-        scaffoldBackgroundColor: const Color(0xFFF8F9FA),
-        primaryColor: const Color(0xFF667eea),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF121212),
-        primaryColor: const Color(0xFF667eea),
-        useMaterial3: true,
-      ),
-      home: TeacherCommunicationScreen(
-        onToggleTheme: toggleTheme,
-        initialThemeMode: _themeMode,
-      ),
-    );
-  }
-}
-
-// ----------------------------- Data models --------------------------------
-
-class ChatMessage {
-  final String id;
-  final String text;
-  final String time; // human-readable
-  final bool sent; // true if teacher sent
-
-  ChatMessage({
-    required this.id,
-    required this.text,
-    required this.time,
-    required this.sent,
-  });
-}
-
-class Contact {
-  final String id;
-  String name;
-  String role;
-  final String avatar;
-  String status; // "Online" / "Offline"
-  bool isTyping;
-  final List<ChatMessage> messages;
-
-  Contact({
-    required this.id,
-    required this.name,
-    required this.role,
-    required this.avatar,
-    this.status = 'Offline',
-    this.isTyping = false,
-    List<ChatMessage>? messages,
-  }) : messages = messages ?? [];
-}
-
-// --------------------------- Mock / Backend service ------------------------
-
-class BackendService {
-  static const bool useBackend = false;
-}
-
-class LocalBackend {
-  static Future<void> delay([int ms = 500]) =>
-      Future.delayed(Duration(milliseconds: ms));
-
-  static Future<void> sendMessage(Contact contact, ChatMessage message) async {
-    await delay(300);
-    contact.messages.add(message);
-  }
-
-  static Future<void> simulateRemoteTypingAndReply(
-    Contact contact,
-    String replyText,
-  ) async {
-    contact.isTyping = true;
-    await delay(1200);
-    contact.isTyping = false;
-    final reply = ChatMessage(
-      id: UniqueKey().toString(),
-      text: replyText,
-      time: _nowTimeString(),
-      sent: false,
-    );
-    contact.messages.add(reply);
-  }
-
-  static String _nowTimeString() {
-    final now = DateTime.now();
-    final h = now.hour;
-    final m = now.minute.toString().padLeft(2, '0');
-    final ampm = h >= 12 ? 'PM' : 'AM';
-    final hour12 = (h % 12 == 0) ? 12 : h % 12;
-    return '$hour12:$m $ampm';
-  }
-
-  static Future<void> setPresence(Contact contact, bool online) async {
-    await delay(100);
-    contact.status = online ? 'Online' : 'Offline';
-  }
-}
-
-// Firebase stub
-class FirebaseService {
-  FirebaseService._();
-  static final FirebaseService instance = FirebaseService._();
-  Future<void> sendMessage(
-    String contactId,
-    Map<String, dynamic> message,
-  ) async {
-    throw UnimplementedError('Integrate Firebase here');
-  }
-}
-
-// Api stub
-class ApiService {
-  ApiService._();
-  static final ApiService instance = ApiService._();
-  Future<void> fetchContacts() async {
-    await Future.delayed(const Duration(milliseconds: 200));
-  }
-
-  Future<void> sendMessageToServer(
-    String contactId,
-    Map<String, dynamic> payload,
-  ) async {
-    await Future.delayed(const Duration(milliseconds: 200));
-  }
-}
-
-// ---------------------------- Main Screen ---------------------------------
+import 'package:intl/intl.dart';
+import 'services/api_service.dart' as api;
+import 'services/realtime_chat_service.dart';
 
 class TeacherCommunicationScreen extends StatefulWidget {
   final VoidCallback onToggleTheme;
@@ -176,354 +12,366 @@ class TeacherCommunicationScreen extends StatefulWidget {
   const TeacherCommunicationScreen({
     super.key,
     required this.onToggleTheme,
-    required this.initialThemeMode,
+    this.initialThemeMode = ThemeMode.light,
   });
 
   @override
-  State<TeacherCommunicationScreen> createState() =>
-      _TeacherCommunicationScreenState();
+  State<TeacherCommunicationScreen> createState() => _TeacherCommunicationScreenState();
 }
 
-enum ContactFilter { all, students, parents, teachers }
-
-class _TeacherCommunicationScreenState extends State<TeacherCommunicationScreen>
-    with TickerProviderStateMixin {
-  final Map<String, Contact> _contacts = {};
-  late List<String> students;
-  late List<String> parents;
-  late List<String> teachers;
-
-  String? _currentContactId;
-  final TextEditingController _messageController = TextEditingController();
-  final ScrollController _messagesScroll = ScrollController();
-
+class _TeacherCommunicationScreenState extends State<TeacherCommunicationScreen> {
+  // Data
+  final Map<String, ChatContact> _contacts = {};
+  final Map<String, List<ChatMessage>> _messages = {};
+  String? _selectedContactId;
+  String? _currentTeacherUsername;
+  String? _currentTeacherUserId;
+  bool _isLoading = true;
+  
+  // Search and filters
   final TextEditingController _searchController = TextEditingController();
-  ContactFilter _activeFilter = ContactFilter.all;
-
-  final Random _random = Random();
-
-  late AnimationController _fadeController;
-  Timer? _presenceTimer;
+  String _searchQuery = '';
+  String? _selectedClassFilter;
+  String? _selectedGradeFilter;
+  bool _showTeachersOnly = false;
+  bool _showGroupsOnly = false;
+  
+  // Groups
+  final Map<String, ChatGroup> _groups = {};
+  
+  // Chat
+  final TextEditingController _messageController = TextEditingController();
+  RealtimeChatService? _chatService;
+  StreamSubscription? _chatSubscription;
+  
+  // UI
+  final ScrollController _scrollController = ScrollController();
+  
+  static const List<String> _availableClasses = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
+  static const List<String> _availableGrades = ['A', 'B', 'C', 'D'];
 
   @override
   void initState() {
     super.initState();
-    _setupMockContacts();
-    _fadeController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 350),
-    )..forward();
-
-    // Demo presence changes
-    _presenceTimer = Timer.periodic(const Duration(seconds: 12), (_) {
-      if (!mounted) return;
-      setState(() {
-        for (final c in _contacts.values) {
-          if (_random.nextBool()) {
-            c.status = _random.nextBool() ? 'Online' : 'Offline';
-          }
-        }
-      });
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text.toLowerCase());
     });
+    _loadData();
   }
 
   @override
   void dispose() {
-    _messageController.dispose();
-    _messagesScroll.dispose();
     _searchController.dispose();
-    _fadeController.dispose();
-    _presenceTimer?.cancel();
+    _messageController.dispose();
+    _scrollController.dispose();
+    _chatService?.disconnect();
+    _chatSubscription?.cancel();
     super.dispose();
   }
 
-  void _showSnackBar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  void _setupMockContacts() {
-    _contacts.clear();
-
-    void add(Contact c) => _contacts[c.id] = c;
-
-    add(
-      Contact(
-        id: 'student1',
-        name: 'Alex Johnson',
-        role: 'Class 10A',
-        avatar: '👨‍🎓',
-        status: 'Online',
-        messages: [
-          ChatMessage(
-            id: 'm1',
-            text: 'Hello sir, I have a question about the math assignment',
-            time: '10:30 AM',
-            sent: false,
-          ),
-          ChatMessage(
-            id: 'm2',
-            text: "Sure Alex, what's your question?",
-            time: '10:32 AM',
-            sent: true,
-          ),
-          ChatMessage(
-            id: 'm3',
-            text: "I'm having trouble with question 5 in the calculus section",
-            time: '10:33 AM',
-            sent: false,
-          ),
-        ],
-      ),
-    );
-
-    add(
-      Contact(
-        id: 'student2',
-        name: 'Sarah Williams',
-        role: 'Class 11B',
-        avatar: '👩‍🎓',
-        status: 'Online',
-        messages: [
-          ChatMessage(
-            id: 'm4',
-            text: 'Good morning sir!',
-            time: '9:15 AM',
-            sent: false,
-          ),
-          ChatMessage(
-            id: 'm5',
-            text: 'Good morning Sarah! How can I help you today?',
-            time: '9:16 AM',
-            sent: true,
-          ),
-        ],
-      ),
-    );
-
-    add(
-      Contact(
-        id: 'student3',
-        name: 'Michael Brown',
-        role: 'Class 12A',
-        avatar: '👨‍🎓',
-        status: 'Offline',
-        messages: [
-          ChatMessage(
-            id: 'm6',
-            text: 'Sir, when will the exam results be announced?',
-            time: 'Yesterday',
-            sent: false,
-          ),
-          ChatMessage(
-            id: 'm7',
-            text: 'The results will be announced by Friday',
-            time: 'Yesterday',
-            sent: true,
-          ),
-        ],
-      ),
-    );
-
-    add(
-      Contact(
-        id: 'parent1',
-        name: "Mr. & Mrs. Johnson",
-        role: "Alex's Parents",
-        avatar: '👨‍👩‍👧‍👦',
-        status: 'Online',
-        messages: [
-          ChatMessage(
-            id: 'm8',
-            text: "Hello, we wanted to discuss Alex's progress",
-            time: '2:30 PM',
-            sent: false,
-          ),
-          ChatMessage(
-            id: 'm9',
-            text: "Of course, I'd be happy to discuss Alex's progress",
-            time: '2:32 PM',
-            sent: true,
-          ),
-        ],
-      ),
-    );
-
-    add(
-      Contact(
-        id: 'parent2',
-        name: "Mr. & Mrs. Williams",
-        role: "Sarah's Parents",
-        avatar: '👨‍👩‍👧‍👦',
-        status: 'Offline',
-        messages: [
-          ChatMessage(
-            id: 'm10',
-            text: "Thank you for the detailed feedback on Sarah's performance",
-            time: 'Yesterday',
-            sent: false,
-          ),
-        ],
-      ),
-    );
-
-    add(
-      Contact(
-        id: 'teacher1',
-        name: 'Ms. Davis',
-        role: 'English Teacher',
-        avatar: '👩‍🏫',
-        status: 'Online',
-        messages: [
-          ChatMessage(
-            id: 'm11',
-            text: 'Hi, can we coordinate on the upcoming project?',
-            time: '11:45 AM',
-            sent: false,
-          ),
-          ChatMessage(
-            id: 'm12',
-            text: 'Absolutely! When would be a good time to meet?',
-            time: '11:47 AM',
-            sent: true,
-          ),
-        ],
-      ),
-    );
-
-    add(
-      Contact(
-        id: 'teacher2',
-        name: 'Mr. Wilson',
-        role: 'Science Teacher',
-        avatar: '👨‍🏫',
-        status: 'Online',
-        messages: [
-          ChatMessage(
-            id: 'm13',
-            text: 'Great collaboration on the science fair!',
-            time: 'Today',
-            sent: false,
-          ),
-          ChatMessage(
-            id: 'm14',
-            text: 'Thank you! The students really enjoyed it',
-            time: 'Today',
-            sent: true,
-          ),
-        ],
-      ),
-    );
-
-    students = ['student1', 'student2', 'student3'];
-    parents = ['parent1', 'parent2'];
-    teachers = ['teacher1', 'teacher2'];
-  }
-
-  String _nowTimeString() {
-    final now = DateTime.now();
-    final h = now.hour;
-    final m = now.minute.toString().padLeft(2, '0');
-    final ampm = h >= 12 ? 'PM' : 'AM';
-    final hour12 = (h % 12 == 0) ? 12 : h % 12;
-    return '$hour12:$m $ampm';
-  }
-
-  List<Contact> get _filteredContacts {
-    final q = _searchController.text.toLowerCase().trim();
-    Iterable<Contact> all;
-    switch (_activeFilter) {
-      case ContactFilter.students:
-        all = students.map((id) => _contacts[id]!);
-        break;
-      case ContactFilter.parents:
-        all = parents.map((id) => _contacts[id]!);
-        break;
-      case ContactFilter.teachers:
-        all = teachers.map((id) => _contacts[id]!);
-        break;
-      default:
-        all = _contacts.values;
-    }
-    if (q.isEmpty) return all.toList();
-    return all
-        .where(
-          (c) =>
-              c.name.toLowerCase().contains(q) ||
-              c.role.toLowerCase().contains(q),
-        )
-        .toList();
-  }
-
-  void _selectContact(String id) {
-    setState(() {
-      _currentContactId = id;
-    });
-
-    _fadeController.forward(from: 0.0);
-
-    Future.delayed(const Duration(milliseconds: 120), () {
-      if (_messagesScroll.hasClients) {
-        _messagesScroll.jumpTo(_messagesScroll.position.maxScrollExtent);
+  Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+    try {
+      // Load teacher profile
+      final teacherProfile = await api.ApiService.fetchTeacherProfile();
+      if (teacherProfile != null) {
+        final user = teacherProfile['user'] as Map<String, dynamic>?;
+        _currentTeacherUsername = user?['username'] as String?;
+        _currentTeacherUserId = user?['user_id']?.toString();
+        debugPrint('Teacher loaded: $_currentTeacherUsername (ID: $_currentTeacherUserId)');
       }
+
+      // Fetch students - try class-students first, then fallback
+      debugPrint('Fetching students...');
+      List<dynamic> students = await api.ApiService.fetchStudentsFromClasses();
+      debugPrint('Fetched ${students.length} students from class-students');
+      
+      if (students.isEmpty) {
+        try {
+          students = await api.ApiService.fetchStudents();
+          debugPrint('Fetched ${students.length} students from management-admin');
+        } catch (e) {
+          debugPrint('Error fetching students: $e');
+        }
+      }
+
+      // Fetch teachers
+      debugPrint('Fetching teachers...');
+      final teachers = await api.ApiService.fetchTeachers();
+      debugPrint('Fetched ${teachers.length} teachers');
+
+      // Process students
+      for (var studentData in students) {
+        try {
+          Map<String, dynamic>? user;
+          Map<String, dynamic> studentMap = studentData is Map<String, dynamic> ? studentData : {};
+          
+          // Handle both nested and flat structures
+          if (studentMap.containsKey('user') && studentMap['user'] is Map) {
+            user = studentMap['user'] as Map<String, dynamic>?;
+          } else if (studentMap.containsKey('username') || studentMap.containsKey('first_name')) {
+            user = studentMap;
+          } else {
+            user = {};
+          }
+          
+          final userId = user?['user_id']?.toString() ?? 
+                        studentMap['user_id']?.toString() ?? '';
+          final username = user?['username'] as String? ?? 
+                          user?['email'] as String? ?? 
+                          studentMap['username'] as String? ?? '';
+          final firstName = user?['first_name'] as String? ?? '';
+          final lastName = user?['last_name'] as String? ?? '';
+          final name = '$firstName $lastName'.trim();
+          final className = studentMap['applying_class'] as String? ?? 
+                           studentMap['class_name'] as String? ?? '';
+          final grade = studentMap['grade'] as String? ?? '';
+
+          if (userId.isNotEmpty && username.isNotEmpty) {
+            _contacts[userId] = ChatContact(
+              id: userId,
+              name: name.isNotEmpty ? name : username,
+              username: username,
+              type: ContactType.student,
+              className: className,
+              grade: grade,
+              avatar: _getInitials(name.isNotEmpty ? name : username),
+            );
+            _messages[userId] = [];
+            debugPrint('Added student: ${name.isNotEmpty ? name : username} (ID: $userId)');
+          }
+        } catch (e) {
+          debugPrint('Error processing student: $e');
+        }
+      }
+
+      // Process teachers
+      for (var teacherData in teachers) {
+        try {
+          Map<String, dynamic>? user;
+          Map<String, dynamic> teacherMap = teacherData is Map<String, dynamic> ? teacherData : {};
+          
+          if (teacherMap.containsKey('user') && teacherMap['user'] is Map) {
+            user = teacherMap['user'] as Map<String, dynamic>?;
+          } else if (teacherMap.containsKey('username') || teacherMap.containsKey('first_name')) {
+            user = teacherMap;
+          } else {
+            user = {};
+          }
+          
+          final userId = user?['user_id']?.toString() ?? 
+                        teacherMap['user_id']?.toString() ?? '';
+          final username = user?['username'] as String? ?? 
+                          user?['email'] as String? ?? 
+                          teacherMap['username'] as String? ?? '';
+          final firstName = user?['first_name'] as String? ?? '';
+          final lastName = user?['last_name'] as String? ?? '';
+          final name = '$firstName $lastName'.trim();
+          final subject = teacherMap['subject'] as String? ?? '';
+          final className = teacherMap['class_assigned'] as String? ?? '';
+
+          if (userId.isNotEmpty && username.isNotEmpty && userId != _currentTeacherUserId) {
+            _contacts[userId] = ChatContact(
+              id: userId,
+              name: name.isNotEmpty ? name : username,
+              username: username,
+              type: ContactType.teacher,
+              subject: subject,
+              className: className,
+              avatar: _getInitials(name.isNotEmpty ? name : username),
+            );
+            _messages[userId] = [];
+            debugPrint('Added teacher: ${name.isNotEmpty ? name : username} (ID: $userId)');
+          }
+        } catch (e) {
+          debugPrint('Error processing teacher: $e');
+        }
+      }
+
+      debugPrint('Total contacts loaded: ${_contacts.length}');
+      setState(() => _isLoading = false);
+    } catch (e) {
+      debugPrint('Error loading data: $e');
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadChatHistory() async {
+    if (_selectedContactId == null || _currentTeacherUserId == null) return;
+    try {
+      debugPrint('Loading chat history for: $_selectedContactId');
+      final history = await api.ApiService.fetchChatHistory(_selectedContactId!);
+      if (history.isNotEmpty) {
+        setState(() {
+          _messages[_selectedContactId!] = history.map((msg) {
+            final sender = msg['sender'] as Map<String, dynamic>?;
+            final senderId = sender?['user_id']?.toString() ?? '';
+            return ChatMessage(
+              id: msg['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
+              text: msg['message'] as String? ?? '',
+              senderId: senderId,
+              isSent: senderId == _currentTeacherUserId,
+              timestamp: msg['created_at'] as String? ?? DateTime.now().toIso8601String(),
+            );
+          }).toList();
+        });
+        _scrollToBottom();
+        debugPrint('Loaded ${_messages[_selectedContactId!]!.length} messages');
+      }
+    } catch (e) {
+      debugPrint('Error loading chat history: $e');
+    }
+  }
+
+  List<ChatContact> get _filteredContacts {
+    return _contacts.values.where((contact) {
+      // Search filter
+      if (_searchQuery.isNotEmpty && !contact.name.toLowerCase().contains(_searchQuery)) {
+        return false;
+      }
+      
+      // Type filters
+      if (_showTeachersOnly && contact.type != ContactType.teacher) return false;
+      if (_showGroupsOnly && contact.type != ContactType.group) return false;
+      if (!_showTeachersOnly && !_showGroupsOnly && contact.type == ContactType.teacher) return false;
+      
+      // Class filter
+      if (_selectedClassFilter != null && contact.className != _selectedClassFilter) return false;
+      
+      // Grade filter
+      if (_selectedGradeFilter != null && contact.grade != _selectedGradeFilter) return false;
+      
+      return true;
+    }).toList()..sort((a, b) => a.name.compareTo(b.name));
+  }
+
+  List<ChatGroup> get _filteredGroups {
+    return _groups.values.where((group) {
+      if (_searchQuery.isNotEmpty && !group.name.toLowerCase().contains(_searchQuery)) {
+        return false;
+      }
+      if (_selectedClassFilter != null && group.className != _selectedClassFilter) return false;
+      if (_selectedGradeFilter != null && group.grade != _selectedGradeFilter) return false;
+      return true;
+    }).toList()..sort((a, b) => a.name.compareTo(b.name));
+  }
+
+  Future<void> _selectContact(String contactId) async {
+    if (_selectedContactId == contactId) return;
+    
+    // Disconnect previous chat
+    _chatService?.disconnect();
+    _chatSubscription?.cancel();
+    
+    setState(() {
+      _selectedContactId = contactId;
     });
+    
+    await _loadChatHistory();
+    await _initializeRealtimeChat();
+  }
+
+  Future<void> _initializeRealtimeChat() async {
+    if (_selectedContactId == null || _currentTeacherUsername == null) {
+      debugPrint('Cannot initialize chat: missing contact or username');
+      return;
+    }
+    
+    final contact = _contacts[_selectedContactId];
+    if (contact == null) {
+      debugPrint('Contact not found: $_selectedContactId');
+      return;
+    }
+    
+    try {
+      // Generate room ID
+      final usernames = [_currentTeacherUsername!, contact.username]..sort();
+      final roomId = usernames.join('_');
+      final chatType = contact.type == ContactType.student 
+          ? 'teacher-student' 
+          : contact.type == ContactType.teacher 
+              ? 'teacher-teacher' 
+              : 'teacher-group';
+      
+      debugPrint('Initializing chat: roomId=$roomId, type=$chatType');
+      
+      _chatService = RealtimeChatService(baseWsUrl: 'ws://localhost:8000');
+      await _chatService!.connect(roomId: roomId, chatType: chatType);
+      
+      _chatSubscription = _chatService!.stream?.listen((event) {
+        try {
+          final data = event is String ? jsonDecode(event) : event;
+          if (data is Map) {
+            final messageType = data['type']?.toString() ?? 'message';
+            
+            if (messageType == 'message') {
+              final sender = data['sender']?.toString() ?? '';
+              if (sender != _currentTeacherUsername) {
+                setState(() {
+                  _messages[_selectedContactId!] ??= [];
+                  _messages[_selectedContactId!]!.add(ChatMessage(
+                    id: DateTime.now().millisecondsSinceEpoch.toString(),
+                    text: data['message']?.toString() ?? '',
+                    senderId: contact.id,
+                    isSent: false,
+                    timestamp: DateTime.now().toIso8601String(),
+                  ));
+                });
+                _scrollToBottom();
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('Error processing message: $e');
+        }
+      });
+      
+      debugPrint('Chat initialized successfully');
+    } catch (e) {
+      debugPrint('Error initializing realtime chat: $e');
+    }
   }
 
   void _sendMessage() {
     final text = _messageController.text.trim();
-    if (text.isEmpty || _currentContactId == null) return;
-    final contact = _contacts[_currentContactId!]!;
-    final outgoing = ChatMessage(
-      id: UniqueKey().toString(),
-      text: text,
-      time: _nowTimeString(),
-      sent: true,
-    );
+    if (text.isEmpty || _selectedContactId == null || _currentTeacherUsername == null) return;
+    
+    final contact = _contacts[_selectedContactId];
+    if (contact == null) return;
+    
+    // Add to UI immediately
     setState(() {
-      contact.messages.add(outgoing);
-      _messageController.clear();
+      _messages[_selectedContactId!] ??= [];
+      _messages[_selectedContactId!]!.add(ChatMessage(
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        text: text,
+        senderId: _currentTeacherUserId ?? '',
+        isSent: true,
+        timestamp: DateTime.now().toIso8601String(),
+      ));
     });
+    _messageController.clear();
     _scrollToBottom();
-
-    if (BackendService.useBackend) {
-      // TODO: send to backend
+    
+    // Send via WebSocket
+    if (_chatService != null && _chatService!.isConnected) {
+      _chatService!.sendMessage(
+        sender: _currentTeacherUsername!,
+        recipient: contact.username,
+        message: text,
+      );
+      debugPrint('Message sent to ${contact.name}');
     } else {
-      final replies = [
-        'Thanks, I will check that shortly.',
-        "I'll get back to you on that.",
-        'Sounds good!',
-        'Thanks for the update.',
-        'Understood — I will follow up.',
-      ];
-      final reply = (replies..shuffle()).first;
-      setState(() {
-        contact.isTyping = true;
-      });
-      Future.delayed(const Duration(seconds: 1), () {
-        if (!mounted) return;
-        setState(() {
-          contact.isTyping = false;
-          contact.messages.add(
-            ChatMessage(
-              id: UniqueKey().toString(),
-              text: reply,
-              time: _nowTimeString(),
-              sent: false,
-            ),
-          );
-        });
-        _scrollToBottom();
-      });
+      debugPrint('Chat service not connected, attempting to reconnect...');
+      _initializeRealtimeChat();
     }
   }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_messagesScroll.hasClients) {
-        _messagesScroll.animateTo(
-          _messagesScroll.position.maxScrollExtent,
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -531,640 +379,409 @@ class _TeacherCommunicationScreenState extends State<TeacherCommunicationScreen>
     });
   }
 
-  void _onCompose() {
+  void _showCreateGroupDialog() {
     showDialog(
       context: context,
-      builder: (ctx) {
-        String? selected;
-        final list = _contacts.values.toList();
-        return AlertDialog(
-          title: const Text('Compose Message'),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 360,
-            child: Column(
-              children: [
-                TextField(
-                  decoration: const InputDecoration(
-                    hintText: 'Search contact to message',
-                    prefixIcon: Icon(Icons.search),
-                  ),
-                  onChanged: (v) => setState(() {}),
-                ),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: list.length,
-                    itemBuilder: (context, index) {
-                      final c = list[index];
-                      return RadioListTile<String>(
-                        value: c.id,
-                        groupValue: selected,
-                        onChanged: (val) => setState(() => selected = val),
-                        title: Text(c.name),
-                        subtitle: Text(c.role),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final contactName = selected != null ? _contacts[selected]?.name : null;
-                Navigator.of(context).pop();
-                _showSnackBar('Opening chat with ${contactName ?? "contact"}');
-              },
-              child: const Text('Open Chat'),
-            ),
-          ],
-        );
-      },
+      builder: (context) => CreateGroupDialog(
+        contacts: _contacts.values.where((c) => c.type == ContactType.student).toList(),
+        onGroupCreated: (group) {
+          setState(() {
+            _groups[group.id] = group;
+            _contacts[group.id] = ChatContact(
+              id: group.id,
+              name: group.name,
+              username: group.id,
+              type: ContactType.group,
+              className: group.className,
+              grade: group.grade,
+              avatar: '👥',
+            );
+            _messages[group.id] = [];
+          });
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Group "${group.name}" created successfully')),
+          );
+        },
+      ),
     );
   }
 
-  // ---------------------- AppBar (Real AppBar widget) -----------------------
-  // Matches the requested header:
-  // ←   Teacher Communication      ⟳   👤
-  PreferredSizeWidget _buildAppBar(BuildContext ctx) {
-    return PreferredSize(
-      preferredSize: const Size.fromHeight(64),
-      child: AppBar(
-        // Transparent background so flexibleSpace gradient is visible
-        backgroundColor: Colors.transparent,
+  String _getInitials(String name) {
+    final parts = name.split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : '?';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[100],
+      appBar: AppBar(
         elevation: 0,
-        centerTitle: false,
-        toolbarHeight: 64,
-        automaticallyImplyLeading: false, // we'll put our own leading
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        backgroundColor: const Color(0xFF667eea),
         title: const Text(
           'Teacher Communication',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.group_add, color: Colors.white),
+            onPressed: _showCreateGroupDialog,
+            tooltip: 'Create Group',
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh, color: Colors.white),
             onPressed: () {
-              setState(() {
-                // Refresh communication data
-              });
+              _loadData();
             },
-          ),
-          Padding(
-            padding: const EdgeInsets.only(right: 8.0),
-            child: GestureDetector(
-              onTap: () {
-                // profile action sheet
-                showModalBottomSheet(
-                  context: ctx,
-                  builder: (ctx2) => Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          'Teacher User',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            fontSize: 16,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        const Text('teacher@example.com'),
-                        const SizedBox(height: 12),
-                        ElevatedButton(
-                          onPressed: null,
-                          child: const Text('Close'),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.person_outline, color: Colors.white),
-              ),
-            ),
-          ),
-        ],
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-  // -------------------------------------------------------------------------
-
-  Widget _buildContactCard(Contact c, bool active) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        gradient: active
-            ? const LinearGradient(
-                colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-              )
-            : null,
-        color: active ? null : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => _selectContact(c.id),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-                ),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                c.avatar,
-                style: const TextStyle(fontSize: 20, color: Colors.white),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    c.name,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: active ? Colors.white : null,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    c.role,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: active ? Colors.white70 : Colors.black54,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 200),
-              child: Container(
-                key: ValueKey<String>(c.status),
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: c.status == 'Online'
-                      ? const Color(0xFF51cf66)
-                      : Colors.grey,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // Sidebar adapted for mobile: scrollable and shrinkWrapped
-  Widget _buildSidebarMobile(BuildContext ctx) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(ctx).cardColor,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _onCompose,
-                  icon: const Icon(Icons.edit_outlined),
-                  label: const Text('Compose'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF667eea),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // Search & filter
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.search),
-                    hintText: 'Search contacts',
-                    isDense: true,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              PopupMenuButton<ContactFilter>(
-                onSelected: (f) => setState(() => _activeFilter = f),
-                itemBuilder: (_) => const [
-                  PopupMenuItem(value: ContactFilter.all, child: Text('All')),
-                  PopupMenuItem(
-                    value: ContactFilter.students,
-                    child: Text('Students'),
-                  ),
-                  PopupMenuItem(
-                    value: ContactFilter.parents,
-                    child: Text('Parents'),
-                  ),
-                  PopupMenuItem(
-                    value: ContactFilter.teachers,
-                    child: Text('Teachers'),
-                  ),
-                ],
-                child: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    color: Colors.grey[200],
-                  ),
-                  child: const Icon(Icons.filter_list),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // Contact list (shrinkWrap to avoid nested scrolling overflow)
-          Expanded(
-            child: _filteredContacts.isEmpty
-                ? Center(
-                    child: Text(
-                      'No contacts',
-                      style: TextStyle(
-                        color: Theme.of(ctx).textTheme.bodySmall?.color,
-                      ),
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.only(top: 8),
-                    itemCount: _filteredContacts.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final c = _filteredContacts[index];
-                      final active = c.id == _currentContactId;
-                      return _buildContactCard(c, active);
-                    },
-                  ),
+            tooltip: 'Refresh',
           ),
         ],
       ),
-    );
-  }
-
-  // Sidebar for larger screens
-  Widget _buildSidebar(BuildContext ctx) {
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minWidth: 260, maxWidth: 380),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Theme.of(ctx).cardColor,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [
-            BoxShadow(
-              color: Theme.of(ctx).brightness == Brightness.light
-                  ? Colors.black12
-                  : Colors.black26,
-              blurRadius: 8,
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            ElevatedButton.icon(
-              onPressed: _onCompose,
-              icon: const Icon(Icons.edit_outlined),
-              label: const Text('Compose Message'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF667eea),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Row(
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : Row(
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(Icons.search),
-                      hintText: 'Search contacts',
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
+                // Contacts sidebar
+                Container(
+                  width: 350,
+                  color: Colors.white,
+                  child: Column(
+                    children: [
+                      // Search and filters
+                      Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          children: [
+                            TextField(
+                              controller: _searchController,
+                              decoration: InputDecoration(
+                                hintText: 'Search by name...',
+                                prefixIcon: const Icon(Icons.search),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                filled: true,
+                                fillColor: Colors.grey[50],
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey[300]!),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: DropdownButton<String>(
+                                      value: _selectedClassFilter,
+                                      hint: const Text('All Classes', style: TextStyle(fontSize: 13)),
+                                      isExpanded: true,
+                                      underline: const SizedBox(),
+                                      items: [
+                                        const DropdownMenuItem(value: null, child: Text('All Classes')),
+                                        ..._availableClasses.map((c) => 
+                                          DropdownMenuItem(value: c, child: Text('Class $c'))),
+                                      ],
+                                      onChanged: (v) => setState(() => _selectedClassFilter = v),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey[300]!),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: DropdownButton<String>(
+                                      value: _selectedGradeFilter,
+                                      hint: const Text('All Grades', style: TextStyle(fontSize: 13)),
+                                      isExpanded: true,
+                                      underline: const SizedBox(),
+                                      items: [
+                                        const DropdownMenuItem(value: null, child: Text('All Grades')),
+                                        ..._availableGrades.map((g) => 
+                                          DropdownMenuItem(value: g, child: Text('Grade $g'))),
+                                      ],
+                                      onChanged: (v) => setState(() => _selectedGradeFilter = v),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: FilterChip(
+                                    label: const Text('Teachers', style: TextStyle(fontSize: 12)),
+                                    selected: _showTeachersOnly,
+                                    onSelected: (v) => setState(() {
+                                      _showTeachersOnly = v;
+                                      _showGroupsOnly = false;
+                                    }),
+                                    selectedColor: const Color(0xFF667eea),
+                                    checkmarkColor: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: FilterChip(
+                                    label: const Text('Groups', style: TextStyle(fontSize: 12)),
+                                    selected: _showGroupsOnly,
+                                    onSelected: (v) => setState(() {
+                                      _showGroupsOnly = v;
+                                      _showTeachersOnly = false;
+                                    }),
+                                    selectedColor: const Color(0xFF667eea),
+                                    checkmarkColor: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                      const Divider(height: 1),
+                      // Contacts list
+                      Expanded(
+                        child: _showGroupsOnly 
+                            ? (_filteredGroups.isEmpty
+                                ? const Center(child: Text('No groups found'))
+                                : ListView.builder(
+                                    itemCount: _filteredGroups.length,
+                                    itemBuilder: (context, index) {
+                                      final group = _filteredGroups[index];
+                                      return _buildGroupTile(group);
+                                    },
+                                  ))
+                            : (_filteredContacts.isEmpty
+                                ? const Center(child: Text('No contacts found'))
+                                : ListView.builder(
+                                    itemCount: _filteredContacts.length,
+                                    itemBuilder: (context, index) {
+                                      final contact = _filteredContacts[index];
+                                      return _buildContactTile(contact);
+                                    },
+                                  )),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                PopupMenuButton<ContactFilter>(
-                  onSelected: (f) => setState(() => _activeFilter = f),
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: ContactFilter.all, child: Text('All')),
-                    PopupMenuItem(
-                      value: ContactFilter.students,
-                      child: Text('Students'),
-                    ),
-                    PopupMenuItem(
-                      value: ContactFilter.parents,
-                      child: Text('Parents'),
-                    ),
-                    PopupMenuItem(
-                      value: ContactFilter.teachers,
-                      child: Text('Teachers'),
-                    ),
-                  ],
-                  child: Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(10),
-                      color: Colors.grey[200],
-                    ),
-                    child: const Icon(Icons.filter_list),
-                  ),
+                // Chat area
+                Expanded(
+                  child: _selectedContactId == null
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey[400]),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Select a contact to start chatting',
+                                style: TextStyle(color: Colors.grey[600], fontSize: 16),
+                              ),
+                            ],
+                          ),
+                        )
+                      : _buildChatArea(),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: ListView.separated(
-                  key: ValueKey<String>(
-                    _searchController.text + _activeFilter.toString(),
-                  ),
-                  padding: const EdgeInsets.only(top: 8),
-                  itemCount: _filteredContacts.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (context, index) {
-                    final c = _filteredContacts[index];
-                    final active = c.id == _currentContactId;
-                    return _buildContactCard(c, active);
-                  },
-                ),
+    );
+  }
+
+  Widget _buildContactTile(ChatContact contact) {
+    final isSelected = _selectedContactId == contact.id;
+    final lastMessage = _messages[contact.id]?.lastOrNull;
+    
+    return InkWell(
+      onTap: () => _selectContact(contact.id),
+      child: Container(
+        color: isSelected ? Colors.blue[50] : Colors.transparent,
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: isSelected ? const Color(0xFF667eea) : Colors.grey[300],
+            child: Text(
+              contact.avatar,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
               ),
             ),
-          ],
+          ),
+          title: Text(
+            contact.name,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: isSelected ? const Color(0xFF667eea) : Colors.black87,
+            ),
+          ),
+          subtitle: Text(
+            contact.type == ContactType.student
+                ? '${contact.className ?? ''} ${contact.grade ?? ''}'.trim().isEmpty
+                    ? 'Student'
+                    : '${contact.className ?? ''} ${contact.grade ?? ''}'.trim()
+                : contact.subject ?? 'Teacher',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+          trailing: lastMessage != null
+              ? Text(
+                  _formatTime(lastMessage.timestamp),
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                )
+              : null,
         ),
       ),
     );
   }
 
-  Widget _buildEmptyChat() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: const [
-          Text('💬', style: TextStyle(fontSize: 48, color: Colors.black26)),
-          SizedBox(height: 16),
-          Text(
-            'Select a contact to start messaging',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+  Widget _buildGroupTile(ChatGroup group) {
+    final isSelected = _selectedContactId == group.id;
+    return InkWell(
+      onTap: () => _selectContact(group.id),
+      child: Container(
+        color: isSelected ? Colors.blue[50] : Colors.transparent,
+        child: ListTile(
+          leading: const CircleAvatar(
+            backgroundColor: Color(0xFF667eea),
+            child: Text('👥', style: TextStyle(fontSize: 20)),
           ),
-          SizedBox(height: 8),
-          Text(
-            'Choose from the list below to begin a conversation',
-            style: TextStyle(color: Colors.black54),
+          title: Text(
+            group.name,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: isSelected ? const Color(0xFF667eea) : Colors.black87,
+            ),
           ),
-        ],
+          subtitle: Text(
+            '${group.memberIds.length} members',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+        ),
       ),
     );
   }
 
-  Widget _buildChatArea(BuildContext ctx) {
-    if (_currentContactId == null) return _buildEmptyChat();
-    final contact = _contacts[_currentContactId]!;
+  Widget _buildChatArea() {
+    final contact = _contacts[_selectedContactId];
+    if (contact == null) return const SizedBox();
+    
+    final messages = _messages[_selectedContactId] ?? [];
+    
     return Column(
       children: [
-        // Header
+        // Chat header
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: Color(0xFFE9ECEF))),
-          ),
+          padding: const EdgeInsets.all(16),
+          color: Colors.white,
           child: Row(
             children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-                  ),
-                ),
-                alignment: Alignment.center,
+              CircleAvatar(
+                backgroundColor: const Color(0xFF667eea),
                 child: Text(
                   contact.avatar,
-                  style: const TextStyle(fontSize: 22),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       contact.name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      contact.status,
-                      style: TextStyle(
-                        color: contact.status == 'Online'
-                            ? const Color(0xFF51cf66)
-                            : Colors.grey,
-                      ),
+                      contact.type == ContactType.student
+                          ? '${contact.className ?? ''} ${contact.grade ?? ''}'.trim().isEmpty
+                              ? 'Student'
+                              : '${contact.className ?? ''} ${contact.grade ?? ''}'.trim()
+                          : contact.subject ?? 'Teacher',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: () {
-                  _showSnackBar('More options (simulated)');
-                },
-                icon: const Icon(Icons.more_vert),
-              ),
             ],
           ),
         ),
-
-        // Message list
+        const Divider(height: 1),
+        // Messages
         Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: ListView.builder(
-              controller: _messagesScroll,
-              itemCount: contact.messages.length + (contact.isTyping ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (contact.isTyping && index == contact.messages.length) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 36,
-                          height: 36,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
-                            gradient: const LinearGradient(
-                              colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-                            ),
-                          ),
-                          alignment: Alignment.center,
-                          child: Text(contact.avatar),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color:
-                                Theme.of(context).brightness == Brightness.light
-                                ? const Color(0xFFF8F9FA)
-                                : Colors.grey,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              SizedBox(width: 6, height: 6, child: DotTyping()),
-                              SizedBox(width: 6),
-                              SizedBox(width: 6, height: 6, child: DotTyping()),
-                              SizedBox(width: 6),
-                              SizedBox(width: 6, height: 6, child: DotTyping()),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-                final msg = contact.messages[index];
-                return AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  transitionBuilder: (child, anim) => SizeTransition(
-                    sizeFactor: anim,
-                    axisAlignment: 0.0,
-                    child: FadeTransition(opacity: anim, child: child),
+          child: messages.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.chat_bubble_outline, size: 48, color: Colors.grey[400]),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No messages yet',
+                        style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Start the conversation!',
+                        style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                      ),
+                    ],
                   ),
-                  child: _buildMessageBubble(msg),
-                );
-              },
-            ),
-          ),
+                )
+              : ListView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.all(16),
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final message = messages[index];
+                    return _buildMessageBubble(message);
+                  },
+                ),
         ),
-
-        // Input
+        // Input area
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          decoration: const BoxDecoration(
-            border: Border(top: BorderSide(color: Color(0xFFE9ECEF))),
-          ),
+          padding: const EdgeInsets.all(12),
+          color: Colors.white,
           child: Row(
             children: [
               Expanded(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 130),
-                  child: TextField(
-                    controller: _messageController,
-                    minLines: 1,
-                    maxLines: 5,
-                    decoration: InputDecoration(
-                      hintText: 'Type your message...',
-                      filled: true,
-                      fillColor: Theme.of(ctx).cardColor,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(30),
-                        borderSide: BorderSide.none,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
+                child: TextField(
+                  controller: _messageController,
+                  decoration: InputDecoration(
+                    hintText: 'Type a message...',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
                     ),
-                    onSubmitted: (_) => _sendMessage(),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    filled: true,
+                    fillColor: Colors.grey[50],
                   ),
+                  maxLines: null,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _sendMessage(),
                 ),
               ),
               const SizedBox(width: 8),
-              ElevatedButton(
-                onPressed: () => _sendMessage(),
-                style: ElevatedButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  backgroundColor: const Color(0xFF667eea),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
+              Container(
+                decoration: const BoxDecoration(
+                  color: Color(0xFF667eea),
+                  shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.send, color: Colors.white),
+                child: IconButton(
+                  icon: const Icon(Icons.send, color: Colors.white),
+                  onPressed: _sendMessage,
+                ),
               ),
             ],
           ),
@@ -1173,200 +790,335 @@ class _TeacherCommunicationScreenState extends State<TeacherCommunicationScreen>
     );
   }
 
-  Widget _buildMessageBubble(ChatMessage m) {
-    final sent = m.sent;
-    final bubbleGradient = sent
-        ? const LinearGradient(colors: [Color(0xFF667eea), Color(0xFF764ba2)])
-        : null;
-    final bubbleColor = sent
-        ? null
-        : (Theme.of(context).brightness == Brightness.light
-              ? const Color(0xFFF8F9FA)
-              : Colors.grey[800]);
-    return Row(
-      mainAxisAlignment: sent ? MainAxisAlignment.end : MainAxisAlignment.start,
-      children: [
-        if (!sent)
-          Container(
-            width: 36,
-            height: 36,
-            margin: const EdgeInsets.only(right: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+  Widget _buildMessageBubble(ChatMessage message) {
+    return Align(
+      alignment: message.isSent ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.6,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: message.isSent ? const Color(0xFF667eea) : Colors.grey[200],
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message.text,
+              style: TextStyle(
+                color: message.isSent ? Colors.white : Colors.black87,
+                fontSize: 14,
               ),
             ),
-            alignment: Alignment.center,
-            child: const Text('👨‍🎓'),
-          ),
-        Flexible(
-          child: Container(
-            key: ValueKey<String>(m.id),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            decoration: BoxDecoration(
-              gradient: bubbleGradient,
-              color: bubbleColor,
-              borderRadius: BorderRadius.circular(14),
+            const SizedBox(height: 4),
+            Text(
+              _formatTime(message.timestamp),
+              style: TextStyle(
+                fontSize: 10,
+                color: message.isSent ? Colors.white70 : Colors.grey[600],
+              ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatTime(String timestamp) {
+    try {
+      final dateTime = DateTime.parse(timestamp);
+      final now = DateTime.now();
+      final difference = now.difference(dateTime);
+      
+      if (difference.inDays == 0) {
+        return DateFormat('hh:mm a').format(dateTime);
+      } else if (difference.inDays == 1) {
+        return 'Yesterday ${DateFormat('hh:mm a').format(dateTime)}';
+      } else if (difference.inDays < 7) {
+        return DateFormat('EEE hh:mm a').format(dateTime);
+      } else {
+        return DateFormat('MMM d, hh:mm a').format(dateTime);
+      }
+    } catch (e) {
+      return timestamp;
+    }
+  }
+}
+
+// Data Models
+enum ContactType { student, teacher, group }
+
+class ChatContact {
+  final String id;
+  final String name;
+  final String username;
+  final ContactType type;
+  final String avatar;
+  String? className;
+  String? grade;
+  String? subject;
+
+  ChatContact({
+    required this.id,
+    required this.name,
+    required this.username,
+    required this.type,
+    required this.avatar,
+    this.className,
+    this.grade,
+    this.subject,
+  });
+}
+
+class ChatMessage {
+  final String id;
+  final String text;
+  final String senderId;
+  final bool isSent;
+  final String timestamp;
+
+  ChatMessage({
+    required this.id,
+    required this.text,
+    required this.senderId,
+    required this.isSent,
+    required this.timestamp,
+  });
+}
+
+class ChatGroup {
+  final String id;
+  final String name;
+  final List<String> memberIds;
+  String? className;
+  String? grade;
+
+  ChatGroup({
+    required this.id,
+    required this.name,
+    required this.memberIds,
+    this.className,
+    this.grade,
+  });
+}
+
+// Create Group Dialog
+class CreateGroupDialog extends StatefulWidget {
+  final List<ChatContact> contacts;
+  final Function(ChatGroup) onGroupCreated;
+
+  const CreateGroupDialog({
+    super.key,
+    required this.contacts,
+    required this.onGroupCreated,
+  });
+
+  @override
+  State<CreateGroupDialog> createState() => _CreateGroupDialogState();
+}
+
+class _CreateGroupDialogState extends State<CreateGroupDialog> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
+  final Set<String> _selectedIds = {};
+  String? _selectedClass;
+  String? _selectedGrade;
+  String _searchQuery = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text.toLowerCase());
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _createGroup() {
+    if (_nameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a group name')),
+      );
+      return;
+    }
+
+    if (_selectedIds.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select at least one member')),
+      );
+      return;
+    }
+
+    final group = ChatGroup(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: _nameController.text.trim(),
+      memberIds: _selectedIds.toList(),
+      className: _selectedClass,
+      grade: _selectedGrade,
+    );
+
+    widget.onGroupCreated(group);
+    Navigator.pop(context);
+  }
+
+  List<ChatContact> get _filteredContacts {
+    if (_searchQuery.isEmpty) return widget.contacts;
+    return widget.contacts.where((contact) {
+      return contact.name.toLowerCase().contains(_searchQuery);
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: Container(
+        width: 500,
+        height: 600,
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    m.text,
-                    style: TextStyle(
-                      color: sent ? Colors.white : Colors.black87,
+                const Text(
+                  'Create Group',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'Group Name',
+                hintText: 'e.g., Class 9 A Students',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.group),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey[300]!),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: DropdownButton<String>(
+                      value: _selectedClass,
+                      hint: const Text('Select Class'),
+                      isExpanded: true,
+                      underline: const SizedBox(),
+                      items: _TeacherCommunicationScreenState._availableClasses.map((c) => 
+                        DropdownMenuItem(value: c, child: Text('Class $c'))).toList(),
+                      onChanged: (v) => setState(() => _selectedClass = v),
                     ),
                   ),
                 ),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    m.time,
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: sent ? Colors.white70 : Colors.black45,
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey[300]!),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: DropdownButton<String>(
+                      value: _selectedGrade,
+                      hint: const Text('Select Grade'),
+                      isExpanded: true,
+                      underline: const SizedBox(),
+                      items: _TeacherCommunicationScreenState._availableGrades.map((g) => 
+                        DropdownMenuItem(value: g, child: Text('Grade $g'))).toList(),
+                      onChanged: (v) => setState(() => _selectedGrade = v),
                     ),
                   ),
                 ),
               ],
             ),
-          ),
-        ),
-        if (sent)
-          Container(
-            width: 36,
-            height: 36,
-            margin: const EdgeInsets.only(left: 8),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF667eea), Color(0xFF764ba2)],
+            const SizedBox(height: 16),
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search students...',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                filled: true,
+                fillColor: Colors.grey[50],
               ),
             ),
-            alignment: Alignment.center,
-            child: const Text('👨‍🏫'),
-          ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Mobile-focused (stacked), but still responsive for wider screens
-    return Scaffold(
-      appBar: _buildAppBar(context),
-      body: Column(
-        children: [
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isWide = constraints.maxWidth >= 900;
-                if (isWide) {
-                  // Desktop-like: sidebar left, chat right
-                  return Row(
-                    children: [
-                      // Sidebar (constrained)
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          minWidth: 260,
-                          maxWidth: 360,
-                        ),
-                        child: _buildSidebar(context),
-                      ),
-                      const SizedBox(width: 12),
-                      // Chat (expanded)
-                      Expanded(
-                        child: Container(
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).cardColor,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: _buildChatArea(context),
-                        ),
-                      ),
-                    ],
-                  );
-                } else {
-                  // Mobile stacked: chat on top, then contacts below (both flex)
-                  return Column(
-                    children: [
-                      // Chat area - takes roughly 60% of vertical space
-                      Expanded(
-                        flex: 6,
-                        child: Container(
-                          margin: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).cardColor,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: _buildChatArea(context),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      // Sidebar (mobile) - takes remaining vertical space, scrollable
-                      Expanded(
-                        flex: 4,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 8),
-                          child: _buildSidebarMobile(context),
-                        ),
-                      ),
-                    ],
-                  );
-                }
-              },
+            const SizedBox(height: 12),
+            Text(
+              'Select Members (${_selectedIds.length} selected)',
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// Simple animated dots for typing indicator
-class DotTyping extends StatefulWidget {
-  const DotTyping({super.key});
-
-  @override
-  State<DotTyping> createState() => _DotTypingState();
-}
-
-class _DotTypingState extends State<DotTyping>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _anim;
-  @override
-  void initState() {
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..repeat();
-    _anim = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
-    super.initState();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _anim,
-      child: Container(
-        width: 6,
-        height: 6,
-        decoration: BoxDecoration(
-          color: Theme.of(context).primaryColor,
-          borderRadius: BorderRadius.circular(3),
+            const SizedBox(height: 8),
+            Expanded(
+              child: _filteredContacts.isEmpty
+                  ? const Center(child: Text('No students found'))
+                  : ListView.builder(
+                      itemCount: _filteredContacts.length,
+                      itemBuilder: (context, index) {
+                        final contact = _filteredContacts[index];
+                        final isSelected = _selectedIds.contains(contact.id);
+                        return CheckboxListTile(
+                          value: isSelected,
+                          onChanged: (checked) {
+                            setState(() {
+                              if (checked == true) {
+                                _selectedIds.add(contact.id);
+                              } else {
+                                _selectedIds.remove(contact.id);
+                              }
+                            });
+                          },
+                          title: Text(contact.name),
+                          subtitle: Text(
+                            '${contact.className ?? ''} ${contact.grade ?? ''}'.trim().isEmpty
+                                ? 'Student'
+                                : '${contact.className ?? ''} ${contact.grade ?? ''}'.trim(),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _createGroup,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF667eea),
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Create Group'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

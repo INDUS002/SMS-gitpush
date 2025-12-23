@@ -7,6 +7,18 @@ import 'package:core/api/api_service.dart';
 import 'package:core/api/endpoints.dart';
 import 'widgets/school_profile_header.dart';
 
+// Blood group options
+const List<String> bloodGroupOptions = [
+  'A+',
+  'A-',
+  'B+',
+  'B-',
+  'AB+',
+  'AB-',
+  'O+',
+  'O-',
+];
+
 class EditTeacherPage extends StatefulWidget {
   final int? teacherId;
 
@@ -27,7 +39,6 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
   final _mobileNoController = TextEditingController();
   final _emailController = TextEditingController();
   final _addressController = TextEditingController();
-  final _bloodGroupController = TextEditingController();
   final _nationalityController = TextEditingController();
   final _primaryRoomIdController = TextEditingController();
   final _classTeacherSectionIdController = TextEditingController();
@@ -38,6 +49,7 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
   List<Map<String, dynamic>> _departments = [];
   bool _isLoadingDepartments = false;
   String? _gender;
+  String? _bloodGroup;
   
   // Default department names (from old designation dropdown)
   static const List<String> _defaultDepartmentNames = [
@@ -149,7 +161,7 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
       _mobileNoController.text = data['mobile_no'] as String? ?? '';
       _emailController.text = data['email'] as String? ?? '';
       _addressController.text = data['address'] as String? ?? '';
-      _bloodGroupController.text = data['blood_group'] as String? ?? '';
+      _bloodGroup = data['blood_group'] as String?;
       _nationalityController.text = data['nationality'] as String? ?? '';
       _primaryRoomIdController.text = data['primary_room_id'] as String? ?? '';
       _classTeacherSectionIdController.text = data['class_teacher_section_id'] as String? ?? '';
@@ -181,9 +193,8 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
     _qualificationController.dispose();
     _mobileNoController.dispose();
     _emailController.dispose();
-    _addressController.dispose();
-    _bloodGroupController.dispose();
-    _nationalityController.dispose();
+      _addressController.dispose();
+      _nationalityController.dispose();
     _primaryRoomIdController.dispose();
     _classTeacherSectionIdController.dispose();
     _subjectSpecializationController.dispose();
@@ -248,7 +259,7 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
         }
       }
 
-      final payload = {
+      final payload = <String, dynamic>{
         'employee_no': _employeeNoController.text.trim(),
         'first_name': _firstNameController.text.trim(),
         'last_name': _lastNameController.text.trim(),
@@ -260,12 +271,10 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
             ? DateFormat('yyyy-MM-dd').format(_dob!) 
             : null,
         'gender': _gender,
-        if (_selectedDepartmentId != null) 
-          'department': int.tryParse(_selectedDepartmentId!) ?? null,
         'mobile_no': _mobileNoController.text.trim(),
         'email': _emailController.text.trim(),
         'address': _addressController.text.trim(),
-        'blood_group': _bloodGroupController.text.trim(),
+        if (_bloodGroup != null && _bloodGroup!.isNotEmpty) 'blood_group': _bloodGroup,
         'nationality': _nationalityController.text.trim(),
         'primary_room_id': _primaryRoomIdController.text.trim(),
         'class_teacher_section_id': _classTeacherSectionIdController.text.trim(),
@@ -322,7 +331,7 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
               _PreviewItem('Mobile No', _mobileNoController.text),
               _PreviewItem('Email', _emailController.text),
               _PreviewItem('Address', _addressController.text),
-              _PreviewItem('Blood Group', _bloodGroupController.text),
+              _PreviewItem('Blood Group', _bloodGroup ?? 'Not provided'),
               _PreviewItem('Nationality', _nationalityController.text),
               _PreviewItem('Qualification', _qualificationController.text),
               _PreviewItem('Class Teacher Section ID', _classTeacherSectionIdController.text),
@@ -402,7 +411,8 @@ class _EditTeacherPageState extends State<EditTeacherPage> {
                         mobileNoController: _mobileNoController,
                         emailController: _emailController,
                         addressController: _addressController,
-                        bloodGroupController: _bloodGroupController,
+                        bloodGroup: _bloodGroup,
+                        onBloodGroupChanged: (value) => setState(() => _bloodGroup = value),
                         nationalityController: _nationalityController,
                         primaryRoomIdController: _primaryRoomIdController,
                         classTeacherSectionIdController: _classTeacherSectionIdController,
@@ -636,7 +646,8 @@ class _FormCard extends StatelessWidget {
   final TextEditingController mobileNoController;
   final TextEditingController emailController;
   final TextEditingController addressController;
-  final TextEditingController bloodGroupController;
+  final String? bloodGroup;
+  final ValueChanged<String?> onBloodGroupChanged;
   final TextEditingController nationalityController;
   final TextEditingController primaryRoomIdController;
   final TextEditingController classTeacherSectionIdController;
@@ -672,7 +683,8 @@ class _FormCard extends StatelessWidget {
     required this.mobileNoController,
     required this.emailController,
     required this.addressController,
-    required this.bloodGroupController,
+    required this.bloodGroup,
+    required this.onBloodGroupChanged,
     required this.nationalityController,
     required this.primaryRoomIdController,
     required this.classTeacherSectionIdController,
@@ -970,25 +982,23 @@ class _FormCard extends StatelessWidget {
                         value: null,
                         child: Text('Select Department'),
                       ),
-                      ...departments.where((dept) {
-                        // Only show departments with valid integer IDs (from API)
-                        final id = dept['id'];
-                        return id != null && int.tryParse(id.toString()) != null;
-                      }).map(
-                        (dept) => DropdownMenuItem<String>(
-                          value: dept['id']?.toString(),
-                          child: Text(dept['name'] ?? 'Unknown'),
-                        ),
+                      ...departments.map(
+                        (dept) {
+                          final id = dept['id'];
+                          final name = dept['name']?.toString() ?? dept['id']?.toString() ?? 'Unknown';
+                          // Use ID as string for value, but ensure it's not null
+                          final value = id?.toString() ?? name;
+                          return DropdownMenuItem<String>(
+                            value: value,
+                            child: Text(name),
+                          );
+                        },
                       ),
                     ],
                     onChanged: onDepartmentChanged,
                     validator: (value) {
                       if (value == null || value.isEmpty) {
                         return 'Please select a department';
-                      }
-                      // Validate that the selected department has a valid integer ID
-                      if (int.tryParse(value) == null) {
-                        return 'Please select a valid department';
                       }
                       return null;
                     },
@@ -1051,8 +1061,20 @@ class _FormCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: TextFormField(
-                    controller: bloodGroupController,
+                  child: DropdownButtonFormField<String>(
+                    value: bloodGroup,
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: null,
+                        child: Text('Select Blood Group'),
+                      ),
+                      ...bloodGroupOptions.map(
+                        (bg) => DropdownMenuItem<String>(
+                          value: bg,
+                          child: Text(bg),
+                        ),
+                      ),
+                    ],
                     decoration: InputDecoration(
                       labelText: 'Blood Group',
                       border: OutlineInputBorder(
@@ -1062,6 +1084,7 @@ class _FormCard extends StatelessWidget {
                       fillColor: Colors.white,
                       prefixIcon: const Icon(Icons.bloodtype),
                     ),
+                    onChanged: onBloodGroupChanged,
                   ),
                 ),
                 const SizedBox(width: 20),

@@ -7,6 +7,18 @@ import 'package:core/api/api_service.dart';
 import 'package:core/api/endpoints.dart';
 import 'dashboard.dart';
 
+// Blood group options
+const List<String> bloodGroupOptions = [
+  'A+',
+  'A-',
+  'B+',
+  'B-',
+  'AB+',
+  'AB-',
+  'O+',
+  'O-',
+];
+
 class AddTeacherPage extends StatefulWidget {
   const AddTeacherPage({super.key});
 
@@ -25,7 +37,6 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
   final _mobileNoController = TextEditingController();
   final _emailController = TextEditingController();
   final _addressController = TextEditingController();
-  final _bloodGroupController = TextEditingController();
   final _nationalityController = TextEditingController();
   final _primaryRoomIdController = TextEditingController();
   final _classTeacherSectionIdController = TextEditingController();
@@ -36,6 +47,7 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
   List<Map<String, dynamic>> _departments = [];
   bool _isLoadingDepartments = false;
   String? _gender;
+  String? _bloodGroup;
   
   // Default department names (from old designation dropdown)
   static const List<String> _defaultDepartmentNames = [
@@ -141,7 +153,6 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
     _mobileNoController.dispose();
     _emailController.dispose();
     _addressController.dispose();
-    _bloodGroupController.dispose();
     _nationalityController.dispose();
     _primaryRoomIdController.dispose();
     _classTeacherSectionIdController.dispose();
@@ -197,11 +208,32 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
         'is_active': true,
       };
       
-      // Only add department if we have a valid integer ID
-      if (_selectedDepartmentId != null) {
+      // Add department - try to parse as integer first, otherwise use as string
+      if (_selectedDepartmentId != null && _selectedDepartmentId!.isNotEmpty) {
         final deptId = int.tryParse(_selectedDepartmentId!);
         if (deptId != null) {
+          // Valid integer ID from API
           teacherData['department'] = deptId;
+        } else {
+          // String ID from default departments - find the department name
+          final dept = _departments.firstWhere(
+            (d) => d['id']?.toString() == _selectedDepartmentId || d['name']?.toString() == _selectedDepartmentId,
+            orElse: () => <String, dynamic>{},
+          );
+          // If it's a default department, we might need to handle it differently
+          // For now, try to find a matching department by name in the API list
+          final deptName = dept['name']?.toString() ?? _selectedDepartmentId;
+          // Try to find this department in the loaded list
+          final matchingDept = _departments.firstWhere(
+            (d) => d['name']?.toString() == deptName,
+            orElse: () => <String, dynamic>{},
+          );
+          if (matchingDept.isNotEmpty && matchingDept['id'] != null) {
+            final matchingId = int.tryParse(matchingDept['id'].toString());
+            if (matchingId != null) {
+              teacherData['department'] = matchingId;
+            }
+          }
         }
       }
       
@@ -215,8 +247,9 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
       final address = _nullIfEmpty(_addressController.text);
       if (address != null) teacherData['address'] = address;
       
-      final bloodGroup = _nullIfEmpty(_bloodGroupController.text);
-      if (bloodGroup != null) teacherData['blood_group'] = bloodGroup;
+      if (_bloodGroup != null && _bloodGroup!.isNotEmpty) {
+        teacherData['blood_group'] = _bloodGroup;
+      }
       
       final nationality = _nullIfEmpty(_nationalityController.text);
       if (nationality != null) teacherData['nationality'] = nationality;
@@ -774,15 +807,17 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
                                                     value: null,
                                                     child: Text('Select Department'),
                                                   ),
-                                                  ..._departments.where((dept) {
-                                                    // Only show departments with valid integer IDs (from API)
-                                                    final id = dept['id'];
-                                                    return id != null && int.tryParse(id.toString()) != null;
-                                                  }).map(
-                                                    (dept) => DropdownMenuItem<String>(
-                                                      value: dept['id']?.toString(),
-                                                      child: Text(dept['name'] ?? 'Unknown'),
-                                                    ),
+                                                  ..._departments.map(
+                                                    (dept) {
+                                                      final id = dept['id'];
+                                                      final name = dept['name']?.toString() ?? dept['id']?.toString() ?? 'Unknown';
+                                                      // Use ID as string for value, but ensure it's not null
+                                                      final value = id?.toString() ?? name;
+                                                      return DropdownMenuItem<String>(
+                                                        value: value,
+                                                        child: Text(name),
+                                                      );
+                                                    },
                                                   ),
                                                 ],
                                                 decoration: _inputDecoration(
@@ -793,10 +828,6 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
                                                 validator: (value) {
                                                   if (value == null || value.isEmpty) {
                                                     return 'Please select a department';
-                                                  }
-                                                  // Validate that the selected department has a valid integer ID
-                                                  if (int.tryParse(value) == null) {
-                                                    return 'Please select a valid department';
                                                   }
                                                   return null;
                                                 },
@@ -853,11 +884,24 @@ class _AddTeacherPageState extends State<AddTeacherPage> {
                                           isTwoColumns ? (constraints.maxWidth - 30) / 2 : constraints.maxWidth,
                                       child: _LabeledField(
                                         label: 'Blood Group',
-                                        child: TextFormField(
-                                          controller: _bloodGroupController,
+                                        child: DropdownButtonFormField<String>(
+                                          value: _bloodGroup,
+                                          items: [
+                                            const DropdownMenuItem<String>(
+                                              value: null,
+                                              child: Text('Select Blood Group'),
+                                            ),
+                                            ...bloodGroupOptions.map(
+                                              (bg) => DropdownMenuItem<String>(
+                                                value: bg,
+                                                child: Text(bg),
+                                              ),
+                                            ),
+                                          ],
                                           decoration: _inputDecoration(
-                                            hint: 'Enter blood group (e.g., A+, O-)',
+                                            hint: 'Select blood group',
                                           ),
+                                          onChanged: (value) => setState(() => _bloodGroup = value),
                                         ),
                                       ),
                                     ),

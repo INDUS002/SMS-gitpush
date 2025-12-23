@@ -604,14 +604,29 @@ class _BusesManagementPageState extends State<BusesManagementPage> {
       ),
     );
     
-    // Show success message and refresh list after dialog closes
+    // Show success popup and refresh list after dialog closes
     if (result == true && mounted) {
       _loadBuses();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bus updated successfully!'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
+      // Show success popup dialog
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green, size: 28),
+              SizedBox(width: 10),
+              Text('Success'),
+            ],
+          ),
+          content: const Text('Updated Successfully'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
     }
@@ -691,14 +706,29 @@ class _BusesManagementPageState extends State<BusesManagementPage> {
       ),
     );
     
-    // Show success message and refresh list after dialog closes
+    // Show success popup and refresh list after dialog closes
     if (result == true && mounted) {
       _loadBuses();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Bus created successfully!'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
+      // Show success popup dialog
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.green, size: 28),
+              SizedBox(width: 10),
+              Text('Success'),
+            ],
+          ),
+          content: const Text('New bus added Successfully'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
     }

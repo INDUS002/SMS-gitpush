@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:math' as math; // Used for random data generation
 import 'package:intl/intl.dart' as intl;
 import 'package:main_login/main.dart' as main_login;
+import 'package:http/http.dart' as http;
 import 'parent-profile.dart';
 import 'parent-academics.dart';
 import 'parent-bus.dart';
@@ -141,6 +142,108 @@ class _HomeScreenState extends State<HomeScreen> {
   String _attendanceRate = '97%';
   String _classRank = '7th';
   String _selectedPeriod = 'Monthly'; // For performance period selection
+  String? _schoolName;
+  String? _schoolId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadParentProfile();
+  }
+
+  Future<void> _loadParentProfile() async {
+    try {
+      final parentData = await api.ApiService.fetchParentProfile();
+      if (parentData != null) {
+        // Extract school_id and school_name from parent profile
+        _schoolId = parentData['school_id']?.toString();
+        _schoolName = parentData['school_name']?.toString();
+        
+        if (_schoolId == null || _schoolId!.isEmpty || _schoolName == null || _schoolName!.isEmpty) {
+          // Try to get from students
+          final students = parentData['students'];
+          if (students is List && students.isNotEmpty) {
+            final student = students[0];
+            if (student is Map) {
+              if (_schoolId == null || _schoolId!.isEmpty) {
+                _schoolId = student['school']?['school_id']?.toString() ?? 
+                           student['school_id']?.toString();
+              }
+              if (_schoolName == null || _schoolName!.isEmpty) {
+                _schoolName = student['school_name']?.toString() ?? 
+                             student['school']?['name']?.toString();
+              }
+            }
+          }
+        }
+        
+        // Update UI if school name is available
+        if (_schoolName != null && _schoolName!.isNotEmpty) {
+          setState(() {});
+        } else if (_schoolId != null && _schoolId!.isNotEmpty) {
+          // Fallback: try to load school name if not in profile
+          await _loadSchoolName();
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to load parent profile: $e');
+    }
+  }
+
+  Future<void> _loadSchoolName() async {
+    try {
+      if (_schoolId == null || _schoolId!.isEmpty) return;
+      
+      final headers = await api.ApiService.getAuthHeaders();
+      
+      // Try super-admin endpoint to get school by school_id
+      final response = await http.get(
+        Uri.parse('http://localhost:8000/api/super-admin/schools/$_schoolId/'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          setState(() {
+            _schoolName = data['name']?.toString() ?? 'School';
+          });
+          return;
+        }
+      }
+      
+      // Fallback: try to extract from parent profile if student.school is available
+      try {
+        final parentData = await api.ApiService.fetchParentProfile();
+        if (parentData != null) {
+          final students = parentData['students'];
+          if (students is List && students.isNotEmpty) {
+            final student = students[0];
+            if (student is Map) {
+              final school = student['school'];
+              if (school is Map && school['name'] != null) {
+                setState(() {
+                  _schoolName = school['name']?.toString() ?? 'School';
+                });
+                return;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to extract school from profile: $e');
+      }
+      
+      setState(() {
+        _schoolName = 'School';
+      });
+    } catch (e) {
+      debugPrint('Failed to load school name: $e');
+      setState(() {
+        _schoolName = 'School';
+      });
+    }
+  }
 
   void _showSnackBar(String message) {
     if (mounted) {
@@ -1451,7 +1554,23 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('🏫 School Management System'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('🏫 School Management System'),
+            if (_schoolName != null)
+              Text(
+                _schoolName!,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w400,
+                  color: Colors.white70,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+          ],
+        ),
         actions: [
           Row(
             children: [
@@ -3148,13 +3267,25 @@ class _TeacherChatScreenState extends State<_TeacherChatScreen> {
   void _sendMessage() {
     final trimmed = _messageController.text.trim();
     if (trimmed.isEmpty) return;
-    try {
-      if (_chatService != null) {
-        _chatService!.sendMessage(sender: 'parent', message: trimmed);
-      }
-    } catch (error) {
-      debugPrint('Realtime chat send error: $error');
+    
+    if (_studentUsername == null || _studentUsername!.isEmpty) {
+      debugPrint('Cannot send message: student username not initialized');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please wait, initializing chat...')),
+      );
+      _initializeChat(); // Retry initialization
+      return;
     }
+    
+    if (_teacherUsername == null || _teacherUsername!.isEmpty) {
+      debugPrint('Cannot send message: teacher username not initialized');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Teacher information not available.')),
+      );
+      return;
+    }
+    
+    // Add to UI immediately
     setState(() {
       _messages.add({
         'text': trimmed,
@@ -3163,6 +3294,30 @@ class _TeacherChatScreenState extends State<_TeacherChatScreen> {
       });
       _messageController.clear();
     });
+    
+    if (_chatService == null) {
+      debugPrint('Cannot send message: chat service not initialized');
+      _initializeRealtimeChat().catchError((error) {
+        debugPrint('Failed to reconnect: $error');
+      });
+      return;
+    }
+    
+    try {
+      if (_chatService!.isConnected) {
+        _chatService!.sendMessage(
+          sender: _studentUsername!,
+          recipient: _teacherUsername!,
+          message: trimmed,
+        );
+        debugPrint('Message sent: student=$_studentUsername, teacher=$_teacherUsername');
+      } else {
+        debugPrint('Chat service not connected, reconnecting...');
+        _initializeRealtimeChat();
+      }
+    } catch (error) {
+      debugPrint('Realtime chat send error: $error');
+    }
   }
 
   void _sendVoiceMessage() {
@@ -3190,8 +3345,11 @@ class _TeacherChatScreenState extends State<_TeacherChatScreen> {
             _teacherUsername = teacherUser?['username']?.toString() ?? teacherUser?['email']?.toString() ?? widget.teacher['name']?.toString() ?? '';
             
             // Create room ID from student and teacher usernames
-            if (_studentUsername != null && _teacherUsername != null) {
-              _chatRoomId = '${_studentUsername}_${_teacherUsername}';
+            // Sort usernames to ensure same room ID regardless of who connects first
+            if (_studentUsername != null && _teacherUsername != null && _studentUsername!.isNotEmpty && _teacherUsername!.isNotEmpty) {
+              final usernames = [_studentUsername!, _teacherUsername!];
+              usernames.sort();
+              _chatRoomId = '${usernames[0]}_${usernames[1]}';
             } else if (studentId.isNotEmpty) {
               _chatRoomId = studentId;
             } else {
@@ -3261,27 +3419,49 @@ class _TeacherChatScreenState extends State<_TeacherChatScreen> {
     }
   }
 
-  void _initializeRealtimeChat() {
-    if (_chatRoomId == null) return;
+  Future<void> _initializeRealtimeChat() async {
+    if (_chatRoomId == null || _studentUsername == null || _teacherUsername == null) return;
     
     try {
+      debugPrint('=== Student Chat Connection ===');
+      debugPrint('Room ID: $_chatRoomId');
+      debugPrint('Student username: $_studentUsername');
+      debugPrint('Teacher username: $_teacherUsername');
+      debugPrint('Chat type: teacher-student');
+      
       _chatService = RealtimeChatService(baseWsUrl: 'ws://localhost:8000'); // Use localhost for web
-      _chatService!.connect(roomId: _chatRoomId!);
+      await _chatService!.connect(roomId: _chatRoomId!, chatType: 'teacher-student');
       _chatSubscription = _chatService!.stream?.listen((event) {
         try {
           final payload = event is String ? event : event.toString();
           final decoded = jsonDecode(payload) as Map<String, dynamic>;
-          final messageText = decoded['message']?.toString() ?? '';
-          if (messageText.isEmpty) return;
-          final sender = decoded['sender']?.toString() ?? '';
-          final isTeacher = sender == 'teacher' || sender == _teacherUsername;
-          setState(() {
-            _messages.add({
-              'text': messageText,
-              'isTeacher': isTeacher,
-              'time': intl.DateFormat('hh:mm a').format(DateTime.now()),
+          
+          final messageType = decoded['type']?.toString() ?? 'message';
+          
+          // Handle connection messages
+          if (messageType == 'connection') {
+            debugPrint('Connected to chat: ${decoded['user']}');
+            return;
+          }
+          
+          // Only process actual messages
+          if (messageType == 'message') {
+            final messageText = decoded['message']?.toString() ?? '';
+            if (messageText.isEmpty) return;
+            
+            final sender = decoded['sender']?.toString() ?? '';
+            final isTeacher = sender == 'teacher' || sender == _teacherUsername;
+            
+            setState(() {
+              _messages.add({
+                'text': messageText,
+                'isTeacher': isTeacher,
+                'time': intl.DateFormat('hh:mm a').format(DateTime.now()),
+              });
             });
-          });
+          } else if (messageType == 'error') {
+            debugPrint('Chat error: ${decoded['message']}');
+          }
         } catch (error) {
           debugPrint('Realtime chat parse error: $error');
         }
@@ -3330,20 +3510,37 @@ class _TeacherChatScreenState extends State<_TeacherChatScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.teacher['name'],
+                          widget.teacher['name'] ?? 'Teacher',
                           style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
                             fontSize: 18,
                           ),
                         ),
-                        Text(
-                          widget.teacher['online'] ? 'Online' : 'Offline',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
+                        if (widget.teacher['subject'] != null)
+                          Text(
+                            'Subject: ${widget.teacher['subject']}',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
+                        if (widget.teacher['class_assigned'] != null || widget.teacher['classes_assigned'] != null)
+                          Text(
+                            'Class Assigned: ${widget.teacher['class_assigned'] ?? widget.teacher['classes_assigned'] ?? 'N/A'}',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        if (widget.teacher['subject'] == null && widget.teacher['class_assigned'] == null && widget.teacher['classes_assigned'] == null)
+                          Text(
+                            widget.teacher['online'] ? 'Online' : 'Offline',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
                       ],
                     ),
                   ),

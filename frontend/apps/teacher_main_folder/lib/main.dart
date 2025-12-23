@@ -3,8 +3,9 @@ import 'dart:math';
 import 'package:intl/intl.dart';
 import 'dart:ui' as ui;
 import 'dart:async';
-import 'dart:convert';
 import 'package:main_login/main.dart' as main_login;
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 // Navigation imports
 import 'teacher-assignment.dart';
 import 'teacher-attendance.dart';
@@ -17,7 +18,6 @@ import 'Teacher_classes.dart';
 import 'Teacher_class_students.dart';
 import 'Teacher_Communication.dart';
 import 'Teacher_Results.dart';
-import 'services/realtime_chat_service.dart';
 import 'services/api_service.dart' as api;
 // Removed: import 'screens/stat_detail.dart';
 // Definition for StatDetailScreen added below main file.
@@ -114,6 +114,8 @@ class Teacher {
   final String subject;
   final String avatar;
   final bool isOnline;
+  final String? className; // For students: their class, for teachers: assigned class
+  final String? grade; // For students: their grade
 
   Teacher({
     required this.id,
@@ -121,6 +123,8 @@ class Teacher {
     required this.subject,
     required this.avatar,
     required this.isOnline,
+    this.className,
+    this.grade,
   });
 }
 
@@ -187,6 +191,8 @@ Future<DashboardData> fetchDashboardData() async {
 
 // --- MAIN WIDGET ---
 void main() {
+  // Ensure Flutter binding is initialized before runApp to prevent lifecycle channel warnings
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const TeacherDashboardApp());
 }
 
@@ -217,135 +223,115 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late Future<DashboardData> _dashboardData;
   DateTime _currentDate = DateTime.now();
-  bool _isChatOpen = false;
   String _selectedAttendancePeriod =
       'Weekly'; // Separate for Attendance Performance
   String _selectedProgressPeriod =
       'Weekly'; // Separate for Class Progress Overview
 
-  // Chat variables
-  String _chatMode = 'individual'; // 'individual' or 'group'
-  String? _selectedChatId;
-  String _searchQuery = '';
-  final TextEditingController _chatSearchController = TextEditingController();
-  final TextEditingController _messageController = TextEditingController();
-  bool _isEmojiPickerVisible = false;
-
-  List<Teacher> _teachers = [];
-  List<GroupChat> _groups = [];
-  Map<String, List<ChatMessage>> _chatMessages = {};
-  bool _chatLoading = false;
-  late final RealtimeChatService _chatService;
-  StreamSubscription? _chatSubscription;
-
-  // Dummy room id for testing real‑time chat between
-  // John A. Smith (teacher) and John Michael Smith (student).
-  static const String _defaultChatRoomId = 'STU-2024-001';
+  // Teacher profile (kept for potential use in dashboard)
+  String? _currentTeacherUsername;
+  String? _currentTeacherUserId;
+  String? _schoolName;
+  String? _schoolId;
 
   @override
   void initState() {
     super.initState();
     _dashboardData = fetchDashboardData();
-    _initializeChatData();
-    _initializeRealtimeChat();
+    _loadTeacherProfile();
+  }
+  
+  Future<void> _loadTeacherProfile() async {
+    try {
+      final teacherProfile = await api.ApiService.fetchTeacherProfile();
+      if (teacherProfile != null) {
+        final user = teacherProfile['user'] as Map<String, dynamic>?;
+        _currentTeacherUsername = user?['username'] as String?;
+        _currentTeacherUserId = user?['user_id']?.toString();
+        
+        // Extract school_id and school_name from profile
+        _schoolId = teacherProfile['school_id']?.toString() ?? 
+                    teacherProfile['department']?['school']?['school_id']?.toString();
+        _schoolName = teacherProfile['school_name']?.toString();
+        
+        debugPrint('Teacher username loaded: $_currentTeacherUsername');
+        debugPrint('Teacher user_id loaded: $_currentTeacherUserId');
+        debugPrint('School ID loaded: $_schoolId');
+        debugPrint('School Name loaded: $_schoolName');
+        
+        // Update UI if school name is available
+        if (_schoolName != null && _schoolName!.isNotEmpty) {
+          setState(() {});
+        } else if (_schoolId != null && _schoolId!.isNotEmpty) {
+          // Fallback: try to load school name if not in profile
+          await _loadSchoolName();
+        }
+      } else {
+        debugPrint('Teacher profile is null');
+      }
+    } catch (e) {
+      debugPrint('Failed to load teacher profile: $e');
+    }
+  }
+
+  Future<void> _loadSchoolName() async {
+    try {
+      if (_schoolId == null || _schoolId!.isEmpty) return;
+      
+      final headers = await api.ApiService.getAuthHeaders();
+      
+      // Try super-admin endpoint to get school by school_id
+      final response = await http.get(
+        Uri.parse('http://localhost:8000/api/super-admin/schools/$_schoolId/'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          setState(() {
+            _schoolName = data['name']?.toString() ?? 'School';
+          });
+          return;
+        }
+      }
+      
+      // Fallback: try to extract from teacher profile if department.school is available
+      try {
+        final teacherProfile = await api.ApiService.fetchTeacherProfile();
+        if (teacherProfile != null) {
+          final department = teacherProfile['department'];
+          if (department is Map) {
+            final school = department['school'];
+            if (school is Map && school['name'] != null) {
+              setState(() {
+                _schoolName = school['name']?.toString() ?? 'School';
+              });
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to extract school from profile: $e');
+      }
+      
+      setState(() {
+        _schoolName = 'School';
+      });
+    } catch (e) {
+      debugPrint('Failed to load school name: $e');
+      setState(() {
+        _schoolName = 'School';
+      });
+    }
   }
 
   @override
   void dispose() {
-    _chatSubscription?.cancel();
-    _chatService.disconnect();
-    _chatSearchController.dispose();
-    _messageController.dispose();
     super.dispose();
   }
 
-  Future<void> _initializeChatData() async {
-    setState(() => _chatLoading = true);
-    try {
-      final students = await api.ApiService.fetchStudents();
-      _teachers = students.map((s) {
-        final user = s['user'] as Map<String, dynamic>? ?? {};
-        final first = (user['first_name'] as String? ?? '').trim();
-        final last = (user['last_name'] as String? ?? '').trim();
-        final fullName = ('$first $last').trim();
-        final className = s['class_name'] as String? ?? '';
-        final section = s['section'] as String? ?? '';
-        final displayName = fullName.isNotEmpty ? fullName : (s['student_id'] as String? ?? 'Student');
-        final subject = [className, section].where((e) => e.isNotEmpty).join(' • ');
-        return Teacher(
-          id: (s['id'] ?? '').toString(),
-          name: displayName,
-          subject: subject,
-          avatar: _buildInitials(displayName),
-          isOnline: false,
-        );
-      }).toList();
-
-      _groups = [
-        GroupChat(
-          id: 'all-students',
-          name: 'All Students',
-          description: 'Broadcast to all students',
-          members: _teachers,
-          avatar: '👥',
-          unreadCount: 0,
-        ),
-      ];
-
-      _chatMessages = {};
-    } catch (e) {
-      debugPrint('Failed to load chat data: $e');
-    } finally {
-      if (mounted) setState(() => _chatLoading = false);
-    }
-  }
-
-  String _buildInitials(String name) {
-    final parts = name.split(' ').where((p) => p.isNotEmpty).toList();
-    if (parts.isEmpty) return '👤';
-    final initials = parts.take(2).map((p) => p[0]).join();
-    return initials;
-  }
-
-  void _initializeRealtimeChat() {
-    _chatService =
-        RealtimeChatService(baseWsUrl: 'ws://10.0.2.2:8000'); // Android emulator
-    _chatService.connect(roomId: _defaultChatRoomId);
-    _chatSubscription = _chatService.stream?.listen((event) {
-      try {
-        final payload = event is String ? event : event.toString();
-        final decoded = jsonDecode(payload) as Map<String, dynamic>;
-        final sender = decoded['sender']?.toString() ?? 'system';
-        final messageText = decoded['message']?.toString() ?? '';
-        if (messageText.isEmpty) return;
-
-        final chatId = _selectedChatId ?? _defaultChatRoomId;
-        final displayTime = DateFormat('hh:mm a').format(DateTime.now());
-
-        // For testing, map sender ids into friendly names and avatars.
-        final isTeacherSender = sender == 'teacher';
-        final chatSenderKey = isTeacherSender ? 'teacher' : 'user';
-        final displaySenderName =
-            isTeacherSender ? 'John A. Smith' : 'John Michael Smith';
-        final displayAvatar = isTeacherSender ? '👩‍🏫' : '👦';
-
-        setState(() {
-          _chatMessages.putIfAbsent(chatId, () => []);
-          _chatMessages[chatId]!.add(
-            ChatMessage(
-              text: messageText,
-              sender: chatSenderKey,
-              time: displayTime,
-              senderName: displaySenderName,
-              avatarEmoji: displayAvatar,
-            ),
-          );
-        });
-      } catch (error) {
-        debugPrint('Realtime chat parse error: $error');
-      }
-    });
-  }
+  // Chat functionality has been moved to TeacherCommunicationScreen
 
   // --- Core Functions ---
 
@@ -430,60 +416,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  void _toggleChat() {
-    setState(() {
-      _isChatOpen = !_isChatOpen;
-      // When opening the chat, ensure the list view is shown first.
-      if (_isChatOpen) {
-        _selectedChatId = null;
-      }
-    });
-  }
-
-  void _showSnackBar(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
-  }
-
-  List<dynamic> _getFilteredChats() {
-    if (_chatLoading) return [];
-    final query = _searchQuery.toLowerCase();
-    if (_chatMode == 'individual') {
-      return _teachers.where((teacher) {
-        return teacher.name.toLowerCase().contains(query) ||
-            teacher.subject.toLowerCase().contains(query);
-      }).toList();
-    } else {
-      return _groups.where((group) {
-        return group.name.toLowerCase().contains(query) ||
-            group.description.toLowerCase().contains(query);
-      }).toList();
-    }
-  }
-
-  List<ChatMessage> _getSelectedChatMessages() {
-    if (_selectedChatId == null) return [];
-    return _chatMessages[_selectedChatId] ?? [];
-  }
-
-  String _getSelectedChatName() {
-    if (_selectedChatId == null) return '';
-    if (_chatMode == 'individual') {
-      final teacher = _teachers.firstWhere(
-        (t) => t.id == _selectedChatId,
-        orElse: () => _teachers.first,
-      );
-      return teacher.name;
-    } else {
-      final group = _groups.firstWhere(
-        (g) => g.id == _selectedChatId,
-        orElse: () => _groups.first,
-      );
-      return group.name;
-    }
-  }
 
   // Get attendance data based on selected period
   Map<String, String> _getAttendanceData(String period) {
@@ -1101,442 +1033,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  // --- Message Input with Controls (NEW IMPLEMENTATION) ---
-  Widget _buildMessageInputWithControls() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Emoji Picker (shown when visible)
-        if (_isEmojiPickerVisible) _buildEmojiPicker(),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: Colors.grey.shade200)),
-            color: Colors.white, // Ensure background is white
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // Emoji Button
-              IconButton(
-                icon: Icon(
-                  _isEmojiPickerVisible
-                      ? Icons.keyboard
-                      : Icons.sentiment_satisfied_outlined,
-                  color: const Color(0xFF667eea),
-                ),
-                onPressed: () {
-                  setState(() {
-                    _isEmojiPickerVisible = !_isEmojiPickerVisible;
-                  });
-                },
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                iconSize: 24,
-              ),
-              const SizedBox(width: 8),
-
-              // File Attach Button
-              IconButton(
-                icon: const Icon(Icons.attach_file, color: Color(0xFF667eea)),
-                onPressed: () {
-                  _showSnackBar('Attach file (simulated)');
-                },
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                iconSize: 24,
-              ),
-              const SizedBox(width: 8),
-
-              Expanded(
-                child: Container(
-                  constraints: const BoxConstraints(minHeight: 40),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: TextField(
-                    controller: _messageController,
-                    minLines: 1,
-                    maxLines: 5,
-                    keyboardType: TextInputType.multiline,
-                    decoration: const InputDecoration(
-                      hintText: 'Type a message...',
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 15,
-                        vertical: 10,
-                      ),
-                      isDense: true,
-                    ),
-                    onSubmitted: (value) {
-                      _sendChatMessage(value);
-                    },
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-
-              // Voice Button (Smaller for mic icon)
-              IconButton(
-                icon: const Icon(Icons.mic_none, color: Color(0xFF667eea)),
-                onPressed: () {
-                  _showSnackBar('Voice message (simulated)');
-                },
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                iconSize: 24,
-              ),
-              const SizedBox(width: 8),
-
-              // Send Button (Action Button style)
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: ElevatedButton(
-                  onPressed: () => _sendChatMessage(_messageController.text),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF667eea),
-                    shape: const CircleBorder(),
-                    padding: EdgeInsets.zero,
-                    elevation: 0,
-                  ),
-                  child: const Icon(Icons.send, color: Colors.white, size: 20),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildEmojiPicker() {
-    // Common emojis organized by category
-    final List<List<String>> emojiCategories = [
-      // Smileys & People
-      [
-        '😀',
-        '😃',
-        '😄',
-        '😁',
-        '😆',
-        '😅',
-        '😂',
-        '🤣',
-        '😊',
-        '😇',
-        '🙂',
-        '🙃',
-        '😉',
-        '😌',
-        '😍',
-        '🥰',
-        '😘',
-        '😗',
-        '😙',
-        '😚',
-        '😋',
-        '😛',
-        '😝',
-        '😜',
-        '🤪',
-        '🤨',
-        '🧐',
-        '🤓',
-        '😎',
-        '🤩',
-        '🥳',
-        '😏',
-        '😒',
-        '😞',
-        '😔',
-        '😟',
-        '😕',
-        '🙁',
-        '☹️',
-        '😣',
-        '😖',
-        '😫',
-        '😩',
-        '🥺',
-        '😢',
-        '😭',
-        '😤',
-        '😠',
-        '😡',
-        '🤬',
-        '🤯',
-        '😳',
-        '🥵',
-        '🥶',
-        '😱',
-        '😨',
-        '😰',
-        '😥',
-        '😓',
-        '🤗',
-        '🤔',
-        '🤭',
-        '🤫',
-        '🤥',
-        '😶',
-        '😐',
-        '😑',
-        '😬',
-        '🙄',
-        '😯',
-        '😦',
-        '😧',
-        '😮',
-        '😲',
-        '🥱',
-        '😴',
-        '🤤',
-        '😪',
-        '😵',
-        '🤐',
-        '🥴',
-        '🤢',
-        '🤮',
-        '🤧',
-        '😷',
-        '🤒',
-        '🤕',
-      ],
-      // Gestures
-      [
-        '👋',
-        '🤚',
-        '🖐',
-        '✋',
-        '🖖',
-        '👌',
-        '🤏',
-        '✌️',
-        '🤞',
-        '🤟',
-        '🤘',
-        '🤙',
-        '👈',
-        '👉',
-        '👆',
-        '🖕',
-        '👇',
-        '☝️',
-        '👍',
-        '👎',
-        '✊',
-        '👊',
-        '🤛',
-        '🤜',
-        '👏',
-        '🙌',
-        '👐',
-        '🤲',
-        '🤝',
-        '🙏',
-        '✍️',
-        '💪',
-        '🦾',
-        '🦿',
-        '🦵',
-        '🦶',
-        '👂',
-        '🦻',
-        '👃',
-        '🧠',
-        '🦷',
-        '🦴',
-        '👀',
-        '👁️',
-        '👅',
-        '👄',
-      ],
-      // Hearts & Love
-      [
-        '💋',
-        '💌',
-        '💘',
-        '💝',
-        '💖',
-        '💗',
-        '💓',
-        '💞',
-        '💕',
-        '💟',
-        '❣️',
-        '💔',
-        '❤️',
-        '🧡',
-        '💛',
-        '💚',
-        '💙',
-        '💜',
-        '🖤',
-        '🤍',
-        '🤎',
-        '💯',
-        '💢',
-        '💥',
-        '💫',
-        '💦',
-        '💨',
-        '🕳️',
-        '💣',
-        '💬',
-        '👁️‍🗨️',
-        '🗨️',
-        '🗯️',
-        '💭',
-        '💤',
-      ],
-      // Objects & Symbols
-      [
-        '🎉',
-        '🎊',
-        '🎈',
-        '🎁',
-        '🏆',
-        '🥇',
-        '🥈',
-        '🥉',
-        '⚽',
-        '🏀',
-        '🏈',
-        '⚾',
-        '🎾',
-        '🏐',
-        '🏉',
-        '🎱',
-        '🏓',
-        '🏸',
-        '🥅',
-        '🏒',
-        '🏑',
-        '🏏',
-        '⛳',
-        '🏹',
-        '🎣',
-        '🥊',
-        '🥋',
-        '🎽',
-        '🛹',
-        '🛷',
-        '⛸️',
-        '🥌',
-        '🎿',
-        '⛷️',
-        '🏂',
-        '🏋️',
-        '🤼',
-        '🤸',
-        '🤺',
-        '🧘',
-        '🏌️',
-        '🏇',
-        '🧗',
-        '🚵',
-        '🚴',
-        '🏄',
-        '🏊',
-        '🤽',
-        '🤾',
-        '🤹',
-        '🧝',
-        '🧛',
-        '🧜',
-        '🧚',
-        '🧞',
-        '🧟',
-        '🧙',
-      ],
-    ];
-
-    // Flatten all emojis into one list
-    final List<String> allEmojis = emojiCategories
-        .expand((category) => category)
-        .toList();
-
-    return Container(
-      height: 200,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Colors.grey.shade200)),
-      ),
-      child: Column(
-        children: [
-          // Emoji picker header
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: Colors.grey.shade200)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Emoji',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF667eea),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, size: 18),
-                  onPressed: () {
-                    setState(() {
-                      _isEmojiPickerVisible = false;
-                    });
-                  },
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
-              ],
-            ),
-          ),
-          // Emoji grid
-          Expanded(
-            child: GridView.builder(
-              padding: const EdgeInsets.all(10),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 8,
-                crossAxisSpacing: 5,
-                mainAxisSpacing: 5,
-              ),
-              itemCount: allEmojis.length,
-              itemBuilder: (context, index) {
-                return GestureDetector(
-                  onTap: () {
-                    final emoji = allEmojis[index];
-                    final currentText = _messageController.text;
-                    final newText = currentText + emoji;
-                    _messageController.text = newText;
-                    _messageController.selection = TextSelection.fromPosition(
-                      TextPosition(offset: newText.length),
-                    );
-                  },
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Center(
-                      child: Text(
-                        allEmojis[index],
-                        style: const TextStyle(fontSize: 24),
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  // Removed: Chat UI methods moved to TeacherCommunicationScreen
 
   // --- Main Layout Build ---
 
@@ -1552,19 +1049,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       canPop: true,
       onPopInvoked: (didPop) {
         if (didPop) return;
-        // Handle back button - close chat if open, otherwise allow normal navigation
-        if (_isChatOpen) {
-          setState(() {
-            _isChatOpen = false;
-            _selectedChatId = null;
-          });
-        } else {
-          Navigator.of(context).pop();
-        }
+        Navigator.of(context).pop();
       },
       child: Scaffold(
       appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(100.0),
+        preferredSize: Size.fromHeight(_schoolName != null ? 120.0 : 100.0),
         child: _buildHeader(),
       ),
       body: Stack(
@@ -1731,8 +1220,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
               },
             ),
           ),
-          // Chat container is now responsible for the toggle button in the closed state.
-          _buildChatContainer(context),
         ],
       ),
       ),
@@ -1762,15 +1249,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           // Title - allow to shrink with ellipsis on small widths
           Expanded(
-            child: const Text(
-              '🏫 School Management System',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
-              overflow: TextOverflow.ellipsis,
-              maxLines: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '🏫 School Management System',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                if (_schoolName != null)
+                  Text(
+                    _schoolName!,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white70,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+              ],
             ),
           ),
           const SizedBox(width: 12),
@@ -2541,488 +2045,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Widget _buildChatContainer(BuildContext context) {
-    // Define sizes for animation
-    const double chatClosedSize = 64.0;
-    const double chatOpenWidth = 400.0;
-    const double chatOpenHeight = 600.0;
-    final isMobile = MediaQuery.of(context).size.width < 700;
-    final bool fullScreen = isMobile && _isChatOpen;
-
-    return Positioned(
-      bottom: fullScreen ? 0 : 20,
-      right: fullScreen ? 0 : 20,
-      top: fullScreen ? 0 : null,
-      left: fullScreen ? 0 : null,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-        width: fullScreen
-            ? MediaQuery.of(context).size.width
-            : (_isChatOpen ? chatOpenWidth : chatClosedSize),
-        height: fullScreen
-            ? MediaQuery.of(context).size.height
-            : (_isChatOpen ? chatOpenHeight : chatClosedSize),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(
-            fullScreen ? 0 : (_isChatOpen ? 15 : 32),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Color.fromRGBO(0, 0, 0, 0.2),
-              blurRadius: _isChatOpen ? 30 : 10,
-              offset: const Offset(0, 5),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(
-            fullScreen ? 0 : (_isChatOpen ? 15 : 32),
-          ),
-          child: Stack(
-            children: [
-              // Chat Content (Visible when open)
-              if (_isChatOpen)
-                Column(
-                  children: [
-                    // Header
-                    Container(
-                      padding: const EdgeInsets.all(15).copyWith(right: 10),
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xFF667eea), Color(0xFF764ba2)],
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(
-                            '💬 Messages',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white),
-                            onPressed: () {
-                              setState(() {
-                                _isChatOpen = false;
-                                _selectedChatId = null;
-                              });
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                    // Tabs
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() => _chatMode = 'individual');
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 10,
-                                ),
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: _chatMode == 'individual'
-                                          ? const Color(0xFF667eea)
-                                          : Colors.transparent,
-                                      width: 3,
-                                    ),
-                                  ),
-                                ),
-                                child: Text(
-                                  'Individual',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    color: _chatMode == 'individual'
-                                        ? const Color(0xFF667eea)
-                                        : const Color(0xFF999999),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() => _chatMode = 'group');
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 10,
-                                ),
-                                decoration: BoxDecoration(
-                                  border: Border(
-                                    bottom: BorderSide(
-                                      color: _chatMode == 'group'
-                                          ? const Color(0xFF667eea)
-                                          : Colors.transparent,
-                                      width: 3,
-                                    ),
-                                  ),
-                                ),
-                                child: Text(
-                                  'Groups',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    color: _chatMode == 'group'
-                                        ? const Color(0xFF667eea)
-                                        : const Color(0xFF999999),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 1),
-                    // Search Bar - show only when chat list is visible
-                    if (_selectedChatId == null)
-                      Padding(
-                        padding: const EdgeInsets.all(10),
-                        child: TextField(
-                          controller: _chatSearchController,
-                          onChanged: (value) {
-                            setState(() => _searchQuery = value);
-                          },
-                          decoration: InputDecoration(
-                            hintText: _chatMode == 'individual'
-                                ? 'Search Students...'
-                                : 'Search groups...',
-                            prefixIcon: const Icon(Icons.search, size: 20),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(20),
-                              borderSide: const BorderSide(
-                                color: Color(0xFFDDDDDD),
-                              ),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 15,
-                              vertical: 10,
-                            ),
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                    // Main Content: Chat List or Message View
-                    if (_selectedChatId == null)
-                      Expanded(child: _buildChatList())
-                    else
-                      Expanded(
-                        child: Column(
-                          children: [
-                            // Chat header (Inside conversation)
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: Colors.grey.shade200,
-                                  ),
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.arrow_back),
-                                    onPressed: () {
-                                      setState(() {
-                                        _selectedChatId = null;
-                                      });
-                                    },
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      _getSelectedChatName(),
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            // Messages
-                            Expanded(
-                              child: ListView.builder(
-                                padding: const EdgeInsets.all(15),
-                                itemCount: _getSelectedChatMessages().length,
-                                reverse: true,
-                                itemBuilder: (context, index) {
-                                  final messages = _getSelectedChatMessages();
-                                  return _buildChatMessage(
-                                    messages[messages.length - 1 - index],
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    // Message input - only show when a chat is selected
-                    if (_selectedChatId != null)
-                      _buildMessageInputWithControls(),
-                  ],
-                ),
-              // Collapsed Button (Visible when closed)
-              if (!_isChatOpen)
-                InkWell(
-                  onTap: _toggleChat,
-                  borderRadius: BorderRadius.circular(32),
-                  child: Container(
-                    width: chatClosedSize,
-                    height: chatClosedSize,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF667eea),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Center(
-                      child: Text('💬', style: TextStyle(fontSize: 28)),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildChatList() {
-    final filteredChats = _getFilteredChats();
-
-    if (filteredChats.isEmpty) {
-      return Center(
-        child: Text(
-          _searchQuery.isEmpty
-              ? 'No ${_chatMode == 'individual' ? 'teachers' : 'groups'} available'
-              : 'No results found',
-          style: const TextStyle(color: Color(0xFF999999)),
-        ),
-      );
-    }
-
-    return ListView.builder(
-      itemCount: filteredChats.length,
-      itemBuilder: (context, index) {
-        if (_chatMode == 'individual') {
-          final teacher = filteredChats[index] as Teacher;
-
-          return ListTile(
-            leading: Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade200,
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Text(
-                  teacher.avatar,
-                  style: const TextStyle(fontSize: 24),
-                ),
-              ),
-            ),
-            title: Text(
-              teacher.name,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-            subtitle: Text(
-              teacher.subject,
-              style: const TextStyle(fontSize: 11, color: Color(0xFF999999)),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: teacher.isOnline
-                ? Container(
-                    width: 12,
-                    height: 12,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
-                      shape: BoxShape.circle,
-                    ),
-                  )
-                : null,
-            onTap: () {
-              setState(() => _selectedChatId = teacher.id);
-            },
-          );
-        } else {
-          final group = filteredChats[index] as GroupChat;
-
-          return ListTile(
-            leading: Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade200,
-                shape: BoxShape.circle,
-              ),
-              child: Center(
-                child: Text(group.avatar, style: const TextStyle(fontSize: 24)),
-              ),
-            ),
-            title: Text(
-              group.name,
-              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-            ),
-            subtitle: Text(
-              group.description,
-              style: const TextStyle(fontSize: 11, color: Color(0xFF999999)),
-            ),
-            trailing: group.unreadCount > 0
-                ? Container(
-                    width: 24,
-                    height: 24,
-                    decoration: const BoxDecoration(
-                      color: Colors.red,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        group.unreadCount.toString(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  )
-                : null,
-            onTap: () {
-              setState(() => _selectedChatId = group.id);
-            },
-          );
-        }
-      },
-    );
-  }
-
-  Widget _buildChatMessage(ChatMessage message) {
-    final isSent = message.sender == 'user';
-    return Align(
-      alignment: isSent ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-        constraints: const BoxConstraints(maxWidth: 280),
-        decoration: BoxDecoration(
-          color: isSent ? const Color(0xFF667eea) : const Color(0xFFf1f3f4),
-          borderRadius: BorderRadius.circular(15).copyWith(
-            bottomLeft: isSent
-                ? const Radius.circular(15)
-                : const Radius.circular(5),
-            bottomRight: isSent
-                ? const Radius.circular(5)
-                : const Radius.circular(15),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              message.text,
-              style: TextStyle(
-                color: isSent ? Colors.white : const Color(0xFF333333),
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              message.time,
-              style: TextStyle(
-                fontSize: 10,
-                color: isSent ? Colors.white70 : const Color(0xFF666666),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _sendChatMessage(String message) {
-    if (message.isEmpty || _selectedChatId == null) return;
-    try {
-      _chatService.sendMessage(sender: 'teacher', message: message);
-    } catch (error) {
-      debugPrint('Realtime chat send error: $error');
-    }
-    setState(() {
-      final now = DateTime.now();
-      final timeString = DateFormat('hh:mm a').format(now);
-
-      if (!_chatMessages.containsKey(_selectedChatId)) {
-        _chatMessages[_selectedChatId!] = [];
-      }
-
-      _chatMessages[_selectedChatId!]!.add(
-        ChatMessage(
-          text: message,
-          sender: 'user',
-          time: timeString,
-          avatarEmoji: '👤',
-        ),
-      );
-      _messageController.clear();
-
-      // Simulate teacher response
-      Future.delayed(const Duration(seconds: 1), () {
-        final responses = [
-          "That sounds great! Let's discuss further.",
-          "I appreciate your input. Thank you!",
-          "Got it, I'll work on that.",
-          "This is very helpful information.",
-          "Let's schedule a time to talk about this.",
-        ];
-        final randomResponse = responses[Random().nextInt(responses.length)];
-
-        if (_chatMode == 'individual') {
-          final teacher = _teachers.firstWhere(
-            (t) => t.id == _selectedChatId,
-            orElse: () => _teachers.first,
-          );
-          _chatMessages[_selectedChatId!]!.add(
-            ChatMessage(
-              text: randomResponse,
-              sender: 'teacher',
-              time: DateFormat('hh:mm a').format(DateTime.now()),
-              senderName: teacher.name,
-              avatarEmoji: teacher.avatar,
-            ),
-          );
-        } else {
-          _chatMessages[_selectedChatId!]!.add(
-            ChatMessage(
-              text: randomResponse,
-              sender: 'teacher',
-              time: DateFormat('hh:mm a').format(DateTime.now()),
-              senderName: 'Mr. David Chen',
-              avatarEmoji: '👨‍🏫',
-            ),
-          );
-        }
-        setState(() {}); // Rebuild to show response
-      });
-    });
-  }
+  // Removed: Chat methods moved to TeacherCommunicationScreen
 }
 
 // --- CUSTOM PAINTERS FOR CHARTS ---

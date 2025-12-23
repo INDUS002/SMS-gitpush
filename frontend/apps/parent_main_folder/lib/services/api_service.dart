@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   static const _base = 'http://localhost:8000/api/management-admin';
@@ -9,10 +10,36 @@ class ApiService {
   static const parentBase = 'http://localhost:8000/api/student-parent';
   static const parentEndpoint = '$parentBase/parent/';
 
+  /// Get authentication headers with token (private)
+  static Future<Map<String, String>> _getAuthHeaders() async {
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('access_token');
+      if (token != null) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+    } catch (e) {
+      // If SharedPreferences fails, continue without token
+    }
+    
+    return headers;
+  }
+
+  /// Get authentication headers with token (public)
+  static Future<Map<String, String>> getAuthHeaders() async {
+    return await _getAuthHeaders();
+  }
+
   /// Fetch chat messages between two users (sender and recipient usernames)
   static Future<List<Map<String, dynamic>>> fetchCommunications(String senderUsername, String recipientUsername) async {
     final uri = Uri.parse('$communicationsEndpoint?sender=$senderUsername&recipient=$recipientUsername');
-    final resp = await http.get(uri, headers: {'Content-Type': 'application/json'}).timeout(const Duration(seconds: 10));
+    final headers = await _getAuthHeaders();
+    final resp = await http.get(uri, headers: headers).timeout(const Duration(seconds: 10));
     if (resp.statusCode == 200) {
       final data = jsonDecode(resp.body);
       if (data is List) return List<Map<String, dynamic>>.from(data);
@@ -25,9 +52,9 @@ class ApiService {
   }
 
   static Future<List<dynamic>> fetchTeachers() async {
+    final headers = await _getAuthHeaders();
     final resp = await http
-        .get(Uri.parse(teachersEndpoint),
-            headers: {'Content-Type': 'application/json'})
+        .get(Uri.parse(teachersEndpoint), headers: headers)
         .timeout(const Duration(seconds: 10));
     if (resp.statusCode == 200) {
       final data = jsonDecode(resp.body);
@@ -41,9 +68,9 @@ class ApiService {
   }
 
   static Future<List<dynamic>> fetchStudents() async {
+    final headers = await _getAuthHeaders();
     final resp = await http
-        .get(Uri.parse(studentsEndpoint),
-            headers: {'Content-Type': 'application/json'})
+        .get(Uri.parse(studentsEndpoint), headers: headers)
         .timeout(const Duration(seconds: 10));
     if (resp.statusCode == 200) {
       final data = jsonDecode(resp.body);
@@ -59,9 +86,9 @@ class ApiService {
   /// Fetch parent profile data
   static Future<Map<String, dynamic>?> fetchParentProfile() async {
     try {
+      final headers = await _getAuthHeaders();
       final resp = await http
-          .get(Uri.parse(parentEndpoint),
-              headers: {'Content-Type': 'application/json'})
+          .get(Uri.parse(parentEndpoint), headers: headers)
           .timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
         final data = jsonDecode(resp.body);
@@ -81,9 +108,9 @@ class ApiService {
   /// Fetch student data by student ID
   static Future<Map<String, dynamic>?> fetchStudentById(int studentId) async {
     try {
+      final headers = await _getAuthHeaders();
       final resp = await http
-          .get(Uri.parse('$studentsEndpoint$studentId/'),
-              headers: {'Content-Type': 'application/json'})
+          .get(Uri.parse('$studentsEndpoint$studentId/'), headers: headers)
           .timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
         return jsonDecode(resp.body) as Map<String, dynamic>;
@@ -97,9 +124,9 @@ class ApiService {
   /// Fetch current logged-in student's profile
   static Future<Map<String, dynamic>?> fetchStudentProfile() async {
     try {
+      final headers = await _getAuthHeaders();
       final resp = await http
-          .get(Uri.parse('$parentBase/student-profile/'),
-              headers: {'Content-Type': 'application/json'})
+          .get(Uri.parse('$parentBase/student-profile/'), headers: headers)
           .timeout(const Duration(seconds: 10));
       if (resp.statusCode == 200) {
         return jsonDecode(resp.body) as Map<String, dynamic>;

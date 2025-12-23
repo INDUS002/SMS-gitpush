@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:core/api/api_service.dart';
+import 'package:main_login/main.dart' as main_login;
 import 'admin-schools.dart' as schools;
 import 'admin-revenue.dart' as revenue;
 import 'admin-billing.dart' as billing;
@@ -713,7 +714,101 @@ class Header extends StatelessWidget {
             children: [
               const UserInfo(),
               const SizedBox(width: 15),
-              if (isDetailView)
+              // Logout button - show on overview page
+              if (!isDetailView)
+                ElevatedButton.icon(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Logout'),
+                        content: const Text('Are you sure you want to logout?'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              // Navigate to main login page
+                              Navigator.pushAndRemoveUntil(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const main_login.LoginScreen(),
+                                ),
+                                (route) => false,
+                              );
+                            },
+                            child: const Text('Logout', style: TextStyle(color: Colors.red)),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.logout, size: 18),
+                  label: const Text('Logout'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFdc3545),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+              if (isDetailView) ...[
+                // Logout button - also show on detail views
+                ElevatedButton.icon(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Logout'),
+                        content: const Text('Are you sure you want to logout?'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: const Text('Cancel'),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              // Navigate to main login page
+                              Navigator.pushAndRemoveUntil(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => const main_login.LoginScreen(),
+                                ),
+                                (route) => false,
+                              );
+                            },
+                            child: const Text('Logout', style: TextStyle(color: Colors.red)),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.logout, size: 18),
+                  label: const Text('Logout'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFdc3545),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    elevation: 0,
+                  ),
+                ),
+                const SizedBox(width: 15),
                 ElevatedButton.icon(
                   onPressed: onBack,
                   icon: const Icon(Icons.arrow_back, size: 18),
@@ -731,6 +826,7 @@ class Header extends StatelessWidget {
                     elevation: 0,
                   ),
                 ),
+              ],
             ],
           ),
         ],
@@ -783,25 +879,63 @@ class MobileHeader extends StatelessWidget {
                   },
                   tooltip: 'Menu',
                 ),
-          Text(
-            isDetailView ? 'Schools List' : 'Admin Dashboard',
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF333333),
+          Expanded(
+            child: Text(
+              isDetailView ? 'Schools List' : 'Admin Dashboard',
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF333333),
+              ),
+              textAlign: TextAlign.center,
             ),
+          ),
+          // Logout button for mobile header
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text('Logout'),
+                  content: const Text('Are you sure you want to logout?'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        // Navigate to main login page
+                        Navigator.pushAndRemoveUntil(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const main_login.LoginScreen(),
+                          ),
+                          (route) => false,
+                        );
+                      },
+                      child: const Text('Logout', style: TextStyle(color: Colors.red)),
+                    ),
+                  ],
+                ),
+              );
+            },
+            tooltip: 'Logout',
+            color: const Color(0xFFdc3545),
           ),
           if (isDetailView)
             ElevatedButton.icon(
               onPressed: onBack,
               icon: const Icon(Icons.arrow_back, size: 18),
-              label: const Text('Back to Overview'),
+              label: const Text('Back'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF6c757d),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
+                  horizontal: 12,
+                  vertical: 8,
                 ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
